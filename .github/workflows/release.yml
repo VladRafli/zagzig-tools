@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            src-tauri
+            tui
+
+      - name: Install frontend dependencies
+        run: bun install
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "zagzig-tools ${{ github.ref_name }}"
+          releaseBody: |
+            See the assets below to download this release.
+
+            `checksums.txt` lists the SHA-256 of every other asset — verify a download with
+            `Get-FileHash -Algorithm SHA256 <file>` (PowerShell) or `sha256sum -c checksums.txt`
+            (Linux/macOS/WSL, run from the folder you downloaded into).
+          releaseDraft: true
+          prerelease: false
+
+      - name: Build zagzig-tui
+        run: cargo build --release --manifest-path tui/Cargo.toml
+
+      - name: Package zagzig-tui
+        run: Compress-Archive -Path tui/target/release/zagzig-tui.exe -DestinationPath zagzig-tui-x86_64-pc-windows-msvc.zip
+        shell: pwsh
+
+      # SHA-256 for every asset this workflow publishes: the desktop installers +
+      # their .sig files from tauri-action (already in src-tauri/target/release/bundle),
+      # plus the TUI zip built above. This is a plain integrity check for anyone
+      # downloading directly from the release page — it doesn't replace the
+      # updater's minisign signature (which authenticates, not just checksums)
+      # for the desktop app's own auto-update path.
+      - name: Generate checksums
+        shell: pwsh
+        run: |
+          $assets = Get-ChildItem -Path src-tauri/target/release/bundle -Recurse -File
+          $assets += Get-Item zagzig-tui-x86_64-pc-windows-msvc.zip
+          $lines = $assets | Sort-Object Name | ForEach-Object {
+            $hash = (Get-FileHash -Algorithm SHA256 -Path $_.FullName).Hash.ToLower()
+            "$hash  $($_.Name)"
+          }
+          Set-Content -Path checksums.txt -Value $lines -Encoding utf8
+
+      - name: Attach zagzig-tui and checksums to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" zagzig-tui-x86_64-pc-windows-msvc.zip checksums.txt --clobber --repo "${{ github.repository }}"

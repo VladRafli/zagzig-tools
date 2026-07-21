@@ -1,0 +1,28 @@
+[package]
+name = "zagzig-tui"
+version = "0.1.0"
+edition = "2021"
+description = "Terminal UI for zagzig-tools DNS diagnostics"
+license = "AGPL-3.0-or-later"
+
+[[bin]]
+name = "zagzig-tui"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.30"
+crossterm = "0.29"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "process", "net", "sync"] }
+hickory-resolver = "0.26"
+surge-ping = "0.9"
+uuid = { version = "1", features = ["v4"] }
+self_update = { version = "0.44.0", default-features = false, features = [
+    "reqwest",
+    "rustls",
+    "archive-zip",
+    "compression-zip-deflate",
+] }
+
+[profile.release]
+opt-level = "s"
+lto = true
