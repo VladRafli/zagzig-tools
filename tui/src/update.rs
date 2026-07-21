@@ -8,6 +8,13 @@ const REPO_OWNER: &str = "VladRafli";
 const REPO_NAME: &str = "zagzig-tools";
 const BIN_NAME: &str = "zagzig-tui";
 
+// Raw 32-byte Ed25519 verifying key generated with `zipsign gen-key` (see
+// .github/workflows/release.yml, which signs zagzig-tui-*.zip with the
+// matching private key — kept only as the ZIPSIGN_PRIVATE_KEY repo secret,
+// never committed). This is a separate keypair from the desktop app's Tauri
+// updater signing key; the two update mechanisms don't share trust.
+const ZIPSIGN_PUBLIC_KEY: [u8; 32] = *include_bytes!("zipsign-public.key");
+
 #[derive(Clone)]
 pub struct AvailableUpdate {
     pub version: String,
@@ -147,6 +154,10 @@ fn updater() -> self_update::errors::Result<Box<dyn ReleaseUpdate>> {
         .no_confirm(true)
         .show_output(false)
         .show_download_progress(false)
+        // Rejects the download unless it's signed by our zipsign key — this
+        // is what actually makes install_latest_release() trustworthy, as
+        // opposed to just "downloaded over HTTPS from GitHub".
+        .verifying_keys([ZIPSIGN_PUBLIC_KEY])
         .build()
 }
 

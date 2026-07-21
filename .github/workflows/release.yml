@@ -52,12 +52,34 @@ jobs:
         run: Compress-Archive -Path tui/target/release/zagzig-tui.exe -DestinationPath zagzig-tui-x86_64-pc-windows-msvc.zip
         shell: pwsh
 
+      # Signs the TUI's zip with zipsign (Ed25519) so tui/src/update.rs's
+      # verifying_keys() check has something real to verify — unlike the
+      # desktop app, self_update doesn't get this for free from a Tauri
+      # plugin. `=0.1.4` is pinned deliberately: it's the last 0.1.x release,
+      # and it depends on zipsign-api "0.1.4" — the same 0.1.x line that
+      # self_update (via tui/Cargo.toml) resolves to, so signing here and
+      # verifying at runtime are guaranteed to speak the same format. Signing
+      # in place (no -o) keeps the filename identical, which matters because
+      # self_update derives its verification "context" from the asset's
+      # filename.
+      - name: Sign zagzig-tui
+        env:
+          ZIPSIGN_PRIVATE_KEY_B64: ${{ secrets.ZIPSIGN_PRIVATE_KEY }}
+        shell: pwsh
+        run: |
+          cargo install zipsign --version "=0.1.4" --locked
+          $keyPath = Join-Path $env:RUNNER_TEMP "zipsign-private.key"
+          [IO.File]::WriteAllBytes($keyPath, [Convert]::FromBase64String($env:ZIPSIGN_PRIVATE_KEY_B64))
+          zipsign sign zip zagzig-tui-x86_64-pc-windows-msvc.zip $keyPath
+          Remove-Item $keyPath
+
       # SHA-256 for every asset this workflow publishes: the desktop installers +
       # their .sig files from tauri-action (already in src-tauri/target/release/bundle),
-      # plus the TUI zip built above. This is a plain integrity check for anyone
-      # downloading directly from the release page — it doesn't replace the
-      # updater's minisign signature (which authenticates, not just checksums)
-      # for the desktop app's own auto-update path.
+      # plus the now-signed TUI zip. This is a plain integrity check for anyone
+      # downloading directly from the release page — the actual authenticity
+      # checks each app's own auto-update path relies on are the minisign
+      # .sig files (desktop) and the zipsign signature above (TUI), not this
+      # file; checksums.txt just covers manual/direct downloads.
       - name: Generate checksums
         shell: pwsh
         run: |

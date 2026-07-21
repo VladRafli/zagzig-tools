@@ -21,6 +21,7 @@ self_update = { version = "0.44.0", default-features = false, features = [
     "rustls",
     "archive-zip",
     "compression-zip-deflate",
+    "signatures",
 ] }
 
 [profile.release]

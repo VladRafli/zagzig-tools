@@ -1,0 +1,4 @@
+# Raw binary keys — must never go through line-ending normalization, since
+# a single byte flip breaks signature verification.
+*.key binary
+*.pub binary
