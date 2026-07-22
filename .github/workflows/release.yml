@@ -10,7 +10,10 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  # Builds the Windows desktop installers (msi/nsis) and the Windows TUI
+  # binary. The desktop app itself is Windows-only (see README), but the TUI
+  # is cross-platform, hence the separate tui-linux job below.
+  release-windows:
     runs-on: windows-latest
     # The three signing secrets live as Environment secrets under
     # "production" (not Repository secrets) — the job has to opt into that
@@ -101,3 +104,52 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${{ github.ref_name }}" zagzig-tui-x86_64-pc-windows-msvc.zip checksums.txt --clobber --repo "${{ github.repository }}"
+
+  # Builds and signs zagzig-tui for Linux. Runs after release-windows (not
+  # in parallel) because it appends to the checksums.txt that job already
+  # uploaded, and because the draft release has to exist before this job
+  # can upload into it.
+  tui-linux:
+    needs: release-windows
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tui
+
+      - name: Build zagzig-tui
+        run: cargo build --release --manifest-path tui/Cargo.toml
+
+      # -j (junk paths) so the zip stores just "zagzig-tui" at its root,
+      # matching self_update's bin_path_in_archive expectation — same
+      # requirement as the Windows job's Compress-Archive step.
+      - name: Package zagzig-tui
+        run: zip -j zagzig-tui-x86_64-unknown-linux-gnu.zip tui/target/release/zagzig-tui
+
+      # Same zipsign key/version as release-windows — see the comment on
+      # that job's "Sign zagzig-tui" step for why =0.1.4 is pinned.
+      - name: Sign zagzig-tui
+        env:
+          ZIPSIGN_PRIVATE_KEY_B64: ${{ secrets.ZIPSIGN_PRIVATE_KEY }}
+        run: |
+          cargo install zipsign --version "=0.1.4" --locked
+          key_path="$RUNNER_TEMP/zipsign-private.key"
+          echo -n "$ZIPSIGN_PRIVATE_KEY_B64" | base64 -d > "$key_path"
+          zipsign sign zip zagzig-tui-x86_64-unknown-linux-gnu.zip "$key_path"
+          rm "$key_path"
+
+      # Downloads the checksums.txt release-windows already uploaded, adds
+      # this platform's line, and re-uploads it — rather than each job
+      # generating its own separate file.
+      - name: Append checksum and attach to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "${{ github.ref_name }}" --repo "${{ github.repository }}" -p checksums.txt --clobber
+          sha256sum zagzig-tui-x86_64-unknown-linux-gnu.zip >> checksums.txt
+          gh release upload "${{ github.ref_name }}" zagzig-tui-x86_64-unknown-linux-gnu.zip checksums.txt --clobber --repo "${{ github.repository }}"
