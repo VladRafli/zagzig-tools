@@ -252,8 +252,10 @@ bar at the bottom showing keybindings relevant to wherever you currently are.
   last read, and your last connection test result.
 - **Connection Test** — type a host and press Enter to ping it 4 times; results and a short
   history are shown inline.
-- **DNS Servers** — read-only view of DNS servers per adapter (Windows: parsed from `ipconfig
-  /all`; Linux: read from `/etc/resolv.conf`). Press `r` to refresh.
+- **DNS Servers** — read-only view of DNS servers per adapter/link (Windows: parsed from
+  `ipconfig /all`; Linux: `resolvectl status` when available — most modern distros — falling back
+  to `/etc/resolv.conf` otherwise, since on a systemd-resolved system that file only points at a
+  local stub resolver, not the real servers). Press `r` to refresh.
 - **DNS Monitor** — `Tab`/`Shift+Tab` to move between the hostname field, server field, interval
   selector, and the monitor list; `←`/`→` change the interval while it's focused; `Enter` adds a
   monitor from the form, or starts/stops the selected one from the list; `x` removes the selected
