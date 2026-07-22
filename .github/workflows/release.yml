@@ -12,6 +12,12 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
+    # The three signing secrets live as Environment secrets under
+    # "production" (not Repository secrets) — the job has to opt into that
+    # environment or `secrets.*` silently resolves to empty strings instead
+    # of erroring, which is what caused the "Missing comment in secret key"
+    # failures.
+    environment: production
     steps:
       - uses: actions/checkout@v4
 
