@@ -86,6 +86,7 @@ src/                    React frontend (the desktop app's UI)
   lib/                   Hooks and utilities shared across features
 src-tauri/               Rust/Tauri backend — PowerShell-backed commands, elevation, updater config
 tui/                     Standalone terminal UI binary (separate Cargo project)
+docs/                    User manual (user-manual.md, user-manual.pdf) — how to use the apps, not how they're built
 .github/workflows/       Release automation (builds + signs the desktop app, builds the TUI for Windows and Linux)
 ```
 
