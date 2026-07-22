@@ -158,6 +158,19 @@ this lets you set as many as you need per adapter.
   they're tried). Requires administrator rights.
 - **Reset to automatic**: switches the adapter back to DHCP-provided DNS servers.
 
+### DNS Cache
+
+*Network → DNS Cache*
+
+The resolver cache — what `ipconfig /displaydns` shows and `ipconfig /flushdns` clears, with no
+GUI anywhere in Windows for either. Lists every cached record (name, type, data, remaining TTL),
+including negative-cache entries (a lookup that came back empty, shown with no data and a status
+like "No records of this type").
+
+- **Flush DNS cache**: clears the entire cache. Unlike every other write in this app, this does
+  **not** need administrator rights — flushing the client resolver cache is allowed from a
+  standard session, so there's no UAC prompt here.
+
 ### DNS Monitor
 
 *Network → DNS Monitor*

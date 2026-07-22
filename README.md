@@ -22,6 +22,7 @@ Looking for how to use the app rather than how it's built? See the
 | Connection Test | Ping + traceroute a host in plain language: is it reachable, and what path did it take |
 | Network Routes | View and manage the Windows IP routing table (`route print`/`add`/`delete`, with a GUI) |
 | DNS Servers | Set DNS servers per network adapter — as many as you need, not just preferred/alternate |
+| DNS Cache | View and flush the resolver cache — what `ipconfig /displaydns`/`/flushdns` do, no GUI |
 | DNS Monitor | Background, continuous resolution checks against chosen DNS servers, with a running log |
 | Hosts File | Edit `C:\Windows\System32\drivers\etc\hosts`, structured or raw — no built-in GUI exists for this |
 | Proxy Settings | The WinHTTP proxy (`netsh winhttp`) — the machine-wide proxy Windows Update and many background services and CLI tools honor, separate from the one in Settings > Network |
