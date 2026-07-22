@@ -5,9 +5,10 @@ expose — NRPT rules, per-adapter DNS servers, the WinHTTP proxy, the hosts fil
 Authenticode signing, and more. Ships as two independent apps built from one codebase: a desktop
 GUI and a terminal UI, both talking to the same underlying Windows APIs and PowerShell cmdlets.
 
-Windows-only by nature — most features shell out to PowerShell cmdlets (`Get-NetRoute`,
-`Set-DnsClientServerAddress`, `Get-DnsClientNrptRule`, ...) or Win32/WinAPI facilities that don't
-exist on other platforms.
+The desktop app is Windows-only by nature — most features shell out to PowerShell cmdlets
+(`Get-NetRoute`, `Set-DnsClientServerAddress`, `Get-DnsClientNrptRule`, ...) or Win32/WinAPI
+facilities that don't exist on other platforms. The terminal UI's subset of features has no such
+dependency and runs on Linux too — see below.
 
 ## Features
 
@@ -35,6 +36,12 @@ A standalone `ratatui`-based terminal app (`zagzig-tui`) covering a subset of th
 functionality — Dashboard, Connection Test, DNS Servers, DNS Monitor — for headless boxes,
 SSH sessions, or anyone who'd rather stay in a terminal. It's a separate Rust binary with its own
 `Cargo.toml`, not a Tauri window; see [`tui/`](./tui).
+
+Runs on **Windows and Linux** — each release ships a `zagzig-tui-x86_64-pc-windows-msvc.zip` and a
+`zagzig-tui-x86_64-unknown-linux-gnu.zip` (built by the `release-windows` and `tui-linux` jobs in
+`.github/workflows/release.yml` respectively). The platform-specific bits (reading DNS servers,
+the permission-denied hint for raw ICMP sockets) are isolated behind `#[cfg(target_os = ...)]` in
+`tui/src/sysdns.rs` and `tui/src/ping.rs`; everything else is shared.
 
 ### Staying up to date
 
@@ -76,7 +83,7 @@ src/                    React frontend (the desktop app's UI)
   lib/                   Hooks and utilities shared across features
 src-tauri/               Rust/Tauri backend — PowerShell-backed commands, elevation, updater config
 tui/                     Standalone terminal UI binary (separate Cargo project)
-.github/workflows/       Release automation (builds + signs the desktop app, builds the TUI)
+.github/workflows/       Release automation (builds + signs the desktop app, builds the TUI for Windows and Linux)
 ```
 
 ## Development
