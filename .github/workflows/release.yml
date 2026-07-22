@@ -45,7 +45,21 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "zagzig-tools ${{ github.ref_name }}"
+          # NOTE: this is a static, per-release description — update it
+          # before tagging each release (it's plain text, not generated from
+          # commits/changelog). What's below describes v0.3.0 specifically.
           releaseBody: |
+            ## What's new in v0.3.0
+
+            - **DNS Cache** (new page under Network): view the resolver cache and flush it —
+              what `ipconfig /displaydns` / `ipconfig /flushdns` do, with no GUI anywhere in
+              Windows. Flushing doesn't need administrator rights.
+            - **Custom title bar**: the desktop app now draws its own window chrome (drag to
+              move, double-click to maximize, minimize/maximize/close buttons) instead of the
+              OS-native title bar, so it follows the app's own light/dark theme instead of
+              Windows' colors.
+            - The sidebar now shows the running app version, and the window opens maximized.
+
             See the assets below to download this release.
 
             `checksums.txt` lists the SHA-256 of every other asset — verify a download with
