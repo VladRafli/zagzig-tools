@@ -38,6 +38,12 @@ const en = {
       installingProgress: "Downloading update… {{percent}}%",
       error: "Couldn't install the update: {{error}}",
     },
+    titleBar: {
+      minimize: "Minimize",
+      maximize: "Maximize",
+      restore: "Restore",
+      close: "Close",
+    },
   },
   theme: {
     system: "System",

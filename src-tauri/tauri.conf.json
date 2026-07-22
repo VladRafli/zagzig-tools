@@ -15,7 +15,9 @@
         "title": "zagzig-tools",
         "width": 800,
         "height": 600,
-        "maximized": true
+        "maximized": true,
+        "decorations": false,
+        "shadow": true
       }
     ],
     "security": {

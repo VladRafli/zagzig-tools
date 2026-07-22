@@ -40,6 +40,12 @@ const id: typeof en = {
       installingProgress: "Mengunduh pembaruan… {{percent}}%",
       error: "Gagal memasang pembaruan: {{error}}",
     },
+    titleBar: {
+      minimize: "Perkecil",
+      maximize: "Maksimalkan",
+      restore: "Pulihkan",
+      close: "Tutup",
+    },
   },
   theme: {
     system: "Sistem",
