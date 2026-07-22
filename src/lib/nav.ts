@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
 import {
+  Database,
   FileBadge,
   FileCog,
   FileSignature,
@@ -29,6 +30,7 @@ export type NavId =
   | "connection-test"
   | "network-routes"
   | "dns-servers"
+  | "dns-cache"
   | "dns-monitor"
   | "hosts-file"
   | "proxy-settings"
@@ -49,6 +51,7 @@ export const navGroups: NavGroup[] = [
       { id: "connection-test", labelKey: "nav.connectionTest", icon: Radar },
       { id: "network-routes", labelKey: "nav.networkRoutes", icon: Route },
       { id: "dns-servers", labelKey: "nav.dnsServers", icon: Server },
+      { id: "dns-cache", labelKey: "nav.dnsCache", icon: Database },
       { id: "dns-monitor", labelKey: "nav.dnsMonitor", icon: Timer },
       { id: "hosts-file", labelKey: "nav.hostsFile", icon: FileCog },
       { id: "proxy-settings", labelKey: "nav.proxySettings", icon: Waypoints },

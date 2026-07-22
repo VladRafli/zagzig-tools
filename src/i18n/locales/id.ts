@@ -54,6 +54,7 @@ const id: typeof en = {
     connectionTest: "Uji Koneksi",
     networkRoutes: "Rute Jaringan",
     dnsServers: "Server DNS",
+    dnsCache: "Cache DNS",
     dnsMonitor: "Pemantau DNS",
     hostsFile: "File Hosts",
     proxySettings: "Pengaturan Proxy",
@@ -310,6 +311,25 @@ const id: typeof en = {
     resetting: "Mengatur ulang…",
     resetSuccess: "Server DNS untuk {{interface}} telah diatur ulang ke otomatis.",
     resetError: "Gagal mengatur ulang server DNS: {{error}}",
+  },
+  dnsCache: {
+    title: "Cache DNS",
+    subtitle:
+      "Cache resolver — yang ditampilkan <1>ipconfig /displaydns</1> dan dihapus <1>ipconfig /flushdns</1>, tanpa GUI di Windows untuk keduanya.",
+    reading: "Membaca cache DNS…",
+    couldntRead: "Gagal membaca cache DNS: {{error}}",
+    noneConfigured: "Cache DNS kosong.",
+    columns: {
+      name: "Nama",
+      type: "Tipe",
+      data: "Data",
+      ttl: "TTL",
+      status: "Status",
+    },
+    flush: "Hapus cache DNS",
+    flushing: "Menghapus…",
+    flushSuccess: "Cache DNS telah dihapus.",
+    flushError: "Gagal menghapus cache DNS: {{error}}",
   },
   dnsMonitor: {
     title: "Pemantau DNS",

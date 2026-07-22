@@ -42,7 +42,9 @@ pub fn run() {
             proxy::import_winhttp_proxy_from_system,
             certificates::get_certificates,
             certificates::delete_certificate,
-            certificates::export_certificate
+            certificates::export_certificate,
+            dns_cache::get_dns_cache,
+            dns_cache::flush_dns_cache
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -2351,5 +2353,121 @@ Export-Certificate -Cert $cert -FilePath $destPath -Type CERT | Out-Null
         )
         .await
         .map(|_| ())
+    }
+}
+
+// Backs the "DNS Cache" feature: a viewer + flush button for the resolver
+// cache `ipconfig /displaydns` and `ipconfig /flushdns` manage from the
+// command line, with no GUI anywhere in Windows. Reading and flushing are
+// both plain (non-elevated) commands here — verified directly that
+// Clear-DnsClientCache succeeds from a standard, unelevated session, unlike
+// every other write in this app, which is why this is the one feature with
+// no admin-gating anywhere in its UI.
+mod dns_cache {
+    use serde::{Deserialize, Serialize};
+
+    use crate::run_powershell;
+
+    #[derive(Debug, Clone, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct DnsCacheEntry {
+        pub name: String,
+        pub record_type: String,
+        pub data: Option<String>,
+        pub time_to_live: u32,
+        pub section: String,
+        pub status: Option<String>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct RawDnsCacheEntry {
+        entry: String,
+        #[serde(default)]
+        data: Option<String>,
+        time_to_live: u32,
+        section: u32,
+        status: i64,
+        #[serde(rename = "Type")]
+        record_type: u32,
+    }
+
+    // DNS RR type numbers, per Get-DnsClientCache's `Type` field — only the
+    // ones actually likely to show up in a client resolver cache.
+    fn record_type_name(value: u32) -> String {
+        match value {
+            1 => "A".to_string(),
+            2 => "NS".to_string(),
+            5 => "CNAME".to_string(),
+            6 => "SOA".to_string(),
+            12 => "PTR".to_string(),
+            15 => "MX".to_string(),
+            16 => "TXT".to_string(),
+            28 => "AAAA".to_string(),
+            33 => "SRV".to_string(),
+            255 => "ANY".to_string(),
+            other => format!("Type {other}"),
+        }
+    }
+
+    // DNS message section numbers (RFC 1035). Negative-cache entries (a
+    // lookup that came back empty, e.g. an AAAA query on a v4-only name)
+    // stay in Question with no Data and a non-zero Status.
+    fn section_name(value: u32) -> String {
+        match value {
+            0 => "Question".to_string(),
+            1 => "Answer".to_string(),
+            2 => "Authority".to_string(),
+            3 => "Additional".to_string(),
+            other => format!("Section {other}"),
+        }
+    }
+
+    // Win32 DNS API status/error codes as seen in this field; 0 is success
+    // and maps to None (nothing to show). The other two are by far the most
+    // common non-zero values in practice; anything else still shows a
+    // number rather than guessing at a label.
+    fn status_label(value: i64) -> Option<String> {
+        match value {
+            0 => None,
+            9003 => Some("Name not found".to_string()),
+            9501 => Some("No records of this type".to_string()),
+            other => Some(format!("Error {other}")),
+        }
+    }
+
+    #[tauri::command]
+    pub async fn get_dns_cache() -> Result<Vec<DnsCacheEntry>, String> {
+        let trimmed = run_powershell(
+            "@(Get-DnsClientCache | Select-Object Entry, Data, TimeToLive, Section, Status, Type) \
+| ConvertTo-Json -Depth 3 -Compress",
+            &[],
+        )
+        .await?;
+
+        if trimmed.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let raw: Vec<RawDnsCacheEntry> = serde_json::from_str(&trimmed)
+            .map_err(|err| format!("failed to parse powershell output: {err}"))?;
+
+        Ok(raw
+            .into_iter()
+            .map(|r| DnsCacheEntry {
+                name: r.entry,
+                record_type: record_type_name(r.record_type),
+                data: r.data,
+                time_to_live: r.time_to_live,
+                section: section_name(r.section),
+                status: status_label(r.status),
+            })
+            .collect())
+    }
+
+    #[tauri::command]
+    pub async fn flush_dns_cache() -> Result<(), String> {
+        run_powershell("Clear-DnsClientCache", &[]).await?;
+        Ok(())
     }
 }

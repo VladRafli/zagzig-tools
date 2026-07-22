@@ -25,6 +25,7 @@ import { CodeSigningPage } from "@/features/code-signing/code-signing-page";
 import { ConnectionTestPage } from "@/features/connection-test/connection-test-page";
 import { DashboardPage } from "@/features/dashboard/dashboard-page";
 import { DnsPage } from "@/features/dns/dns-page";
+import { DnsCachePage } from "@/features/dns-cache/dns-cache-page";
 import { DnsMonitorPage } from "@/features/dns-monitor/dns-monitor-page";
 import { HostsPage } from "@/features/hosts/hosts-page";
 import { NrptRulesPage } from "@/features/nrpt/nrpt-rules-page";
@@ -91,6 +92,7 @@ function App() {
           {active === "connection-test" && <ConnectionTestPage />}
           {active === "network-routes" && <RoutingPage />}
           {active === "dns-servers" && <DnsPage />}
+          {active === "dns-cache" && <DnsCachePage />}
           {active === "dns-monitor" && <DnsMonitorPage />}
           {active === "hosts-file" && <HostsPage />}
           {active === "proxy-settings" && <ProxyPage />}

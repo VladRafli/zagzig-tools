@@ -52,6 +52,7 @@ const en = {
     connectionTest: "Connection Test",
     networkRoutes: "Network Routes",
     dnsServers: "DNS Servers",
+    dnsCache: "DNS Cache",
     dnsMonitor: "DNS Monitor",
     hostsFile: "Hosts File",
     proxySettings: "Proxy Settings",
@@ -306,6 +307,25 @@ const en = {
     resetting: "Resetting…",
     resetSuccess: "Reset DNS servers for {{interface}} to automatic.",
     resetError: "Couldn't reset DNS servers: {{error}}",
+  },
+  dnsCache: {
+    title: "DNS Cache",
+    subtitle:
+      "The resolver cache — what <1>ipconfig /displaydns</1> shows and <1>ipconfig /flushdns</1> clears, with no GUI anywhere in Windows for either.",
+    reading: "Reading the DNS cache…",
+    couldntRead: "Couldn't read the DNS cache: {{error}}",
+    noneConfigured: "The DNS cache is empty.",
+    columns: {
+      name: "Name",
+      type: "Type",
+      data: "Data",
+      ttl: "TTL",
+      status: "Status",
+    },
+    flush: "Flush DNS cache",
+    flushing: "Flushing…",
+    flushSuccess: "Flushed the DNS cache.",
+    flushError: "Couldn't flush the DNS cache: {{error}}",
   },
   dnsMonitor: {
     title: "DNS Monitor",
