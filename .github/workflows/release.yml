@@ -28,6 +28,29 @@ jobs:
       - name: Install frontend dependencies
         run: bun install
 
+      # TEMPORARY: diagnoses the repeated "Missing comment in secret key"
+      # failure without ever printing the secret itself. Expected: key
+      # length 348, password length 32, decode succeeds, first line reads
+      # "untrusted comment: rsign encrypted secret key" (that line is fixed
+      # boilerplate on every minisign key, not sensitive). Remove this step
+      # once signing works.
+      - name: Debug signing secrets
+        shell: pwsh
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          PW: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          Write-Host "Key length: $($env:KEY.Length) (expected 348)"
+          Write-Host "Password length: $($env:PW.Length) (expected 32)"
+          try {
+            $decoded = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:KEY))
+            $firstLine = ($decoded -split "`n")[0]
+            Write-Host "Base64 decode: OK"
+            Write-Host "Decoded first line: '$firstLine'"
+          } catch {
+            Write-Host "Base64 decode FAILED: $($_.Exception.Message)"
+          }
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
