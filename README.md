@@ -10,6 +10,9 @@ The desktop app is Windows-only by nature — most features shell out to PowerSh
 facilities that don't exist on other platforms. The terminal UI's subset of features has no such
 dependency and runs on Linux too — see below.
 
+Looking for how to use the app rather than how it's built? See the
+[user manual](./docs/user-manual.md) ([PDF](./docs/user-manual.pdf)).
+
 ## Features
 
 | Feature | What it does |

@@ -2,3 +2,5 @@
 # a single byte flip breaks signature verification.
 *.key binary
 *.pub binary
+
+*.pdf binary
