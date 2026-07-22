@@ -47,7 +47,13 @@ function App() {
           below the title bar instead of the real viewport (which would put
           it behind the title bar). */}
       <SidebarProvider className="min-h-0 flex-1 [contain:layout]">
-        <Sidebar>
+        {/* h-full overrides the library's default h-svh — svh is a
+            viewport-relative unit that [contain:layout] on the parent can't
+            touch (it only rescopes *positioning*, not *sizing*), so the
+            fixed sidebar panel was sized to the whole window and overflowed
+            past the bottom by exactly the title bar's height, clipping the
+            footer. h-full resolves against the [contain:layout] box instead. */}
+        <Sidebar className="h-full">
           <SidebarHeader>
             <span className="px-2 text-sm font-semibold">{t("app.title")}</span>
           </SidebarHeader>
