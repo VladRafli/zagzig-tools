@@ -109,3 +109,21 @@ fn permission_hint() -> String {
      `sudo sysctl -w net.ipv4.ping_group_range=\"0 2147483647\"`"
         .to_string()
 }
+
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+
+    // Not run in CI (needs real network/ICMP permission) — manual check
+    // that surge-ping actually round-trips on this OS, run with:
+    // cargo test -- --ignored pings_a_real_host
+    #[tokio::test]
+    #[ignore]
+    async fn pings_a_real_host() {
+        let result = ping_host("1.1.1.1").await;
+        assert!(result.resolved_address.is_some());
+        let successes = result.replies.iter().filter(|r| r.success).count();
+        assert!(successes > 0, "expected at least one successful reply, got: {:?}",
+            result.replies.iter().map(|r| &r.status).collect::<Vec<_>>());
+    }
+}

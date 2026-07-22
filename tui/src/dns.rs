@@ -69,3 +69,19 @@ pub async fn resolve_hostname(hostname: &str, server: Option<IpAddr>) -> Resolve
         },
     }
 }
+
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+
+    // Not run in CI (needs real network) — a manual real-environment check
+    // that the pure-Rust resolver path actually resolves something on this
+    // OS, run with: cargo test -- --ignored resolves_a_real_hostname
+    #[tokio::test]
+    #[ignore]
+    async fn resolves_a_real_hostname() {
+        let outcome = resolve_hostname("one.one.one.one", None).await;
+        assert!(outcome.resolved, "expected a resolved address, got: {:?}", outcome.error);
+        assert!(!outcome.addresses.is_empty());
+    }
+}
