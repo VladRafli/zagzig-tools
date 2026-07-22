@@ -19,6 +19,7 @@ import {
 import { LanguageSwitcher } from "@/components/language-switcher";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import { AdminStatusBadge } from "@/components/admin-status-badge";
+import { AppVersion } from "@/components/app-version";
 import { UpdateButton } from "@/components/update-button";
 import { CertificatesPage } from "@/features/certificates/certificates-page";
 import { CodeSigningPage } from "@/features/code-signing/code-signing-page";
@@ -69,6 +70,7 @@ function App() {
           <UpdateButton />
           <ThemeSwitcher />
           <LanguageSwitcher />
+          <AppVersion />
           <a
             href="https://github.com/VladRafli"
             target="_blank"
