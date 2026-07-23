@@ -333,4 +333,4 @@ release directly from GitHub instead and check it against `checksums.txt`.
 
 - Issues and questions: `github.com/VladRafli/zagzig-tools/issues`
 - Project overview and technical details: [`README.md`](../README.md) in the repository root
-- License: AGPL-3.0-or-later — see [`LICENSE`](../LICENSE)
+- License: MIT — see [`LICENSE`](../LICENSE)
