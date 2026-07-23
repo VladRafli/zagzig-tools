@@ -323,15 +323,39 @@ mod nrpt {
 
     #[tauri::command]
     pub async fn get_nrpt_rules() -> Result<Vec<NrptRule>, String> {
+        // Deliberately NOT Select-Object with calculated (`@{Name=...;
+        // Expression={...}}`) properties for the array-valued fields:
+        // Windows PowerShell 5.1's ConvertTo-Json (unlike PowerShell 7's)
+        // serializes an array returned from a calculated property as
+        // `{"value": [...], "Count": N}` instead of a plain JSON array —
+        // confirmed directly against a real non-elevated `powershell.exe`
+        // process (what this app actually spawns; an interactive pwsh
+        // session, which is PowerShell 7, does not reproduce this). Building
+        // the whole object with ForEach-Object + [ordered]@{} sidesteps it
+        // entirely. `if ($_.X) { ... }` guards against $_.X being $null:
+        // piping $null into ForEach-Object still invokes the script block
+        // once with $_ = $null, which then throws on .ToString().
         let trimmed = run_powershell(
-            "@(Get-DnsClientNrptRule | Select-Object \
-Name, DisplayName, Comment, Namespace, NameEncoding, Version, \
-DnsSecEnabled, DnsSecValidationRequired, DnsSecQueryIPsecEncryption, DnsSecQueryIPsecRequired, \
-DirectAccessEnabled, DirectAccessProxyName, DirectAccessProxyType, DirectAccessQueryIPsecEncryption, DirectAccessQueryIPsecRequired, \
-IPsecCARestriction, \
-@{Name='NameServers';Expression={ @($_.NameServers | ForEach-Object { $_.ToString() }) }}, \
-@{Name='DirectAccessDnsServers';Expression={ @($_.DirectAccessDnsServers | ForEach-Object { $_.ToString() }) }} \
-) | ConvertTo-Json -Depth 4 -Compress",
+            "@(Get-DnsClientNrptRule | ForEach-Object { [ordered]@{ \
+Name = $_.Name; \
+DisplayName = $_.DisplayName; \
+Comment = $_.Comment; \
+Namespace = @(if ($_.Namespace) { $_.Namespace | ForEach-Object { $_.ToString() } }); \
+NameServers = @(if ($_.NameServers) { $_.NameServers | ForEach-Object { $_.ToString() } }); \
+NameEncoding = $_.NameEncoding; \
+Version = $_.Version; \
+DnsSecEnabled = $_.DnsSecEnabled; \
+DnsSecValidationRequired = $_.DnsSecValidationRequired; \
+DnsSecQueryIPsecEncryption = $_.DnsSecQueryIPsecEncryption; \
+DnsSecQueryIPsecRequired = $_.DnsSecQueryIPsecRequired; \
+DirectAccessEnabled = $_.DirectAccessEnabled; \
+DirectAccessDnsServers = @(if ($_.DirectAccessDnsServers) { $_.DirectAccessDnsServers | ForEach-Object { $_.ToString() } }); \
+DirectAccessProxyName = $_.DirectAccessProxyName; \
+DirectAccessProxyType = $_.DirectAccessProxyType; \
+DirectAccessQueryIPsecEncryption = $_.DirectAccessQueryIPsecEncryption; \
+DirectAccessQueryIPsecRequired = $_.DirectAccessQueryIPsecRequired; \
+IPsecCARestriction = $_.IPsecCARestriction \
+} }) | ConvertTo-Json -Depth 4 -Compress",
             &[],
         )
         .await?;
@@ -2197,17 +2221,33 @@ mod certificates {
     // needs elevation; only writing to a LocalMachine store does. `$env:
     // ZAGZIG_CERT_STORE_PATH` carries the (already-validated) store literal
     // in so this script stays fixed regardless of which store is browsed.
+    // See the comment on nrpt::get_nrpt_rules for why this builds the object
+    // with ForEach-Object + [ordered]@{} instead of Select-Object's
+    // calculated-property syntax: on Windows PowerShell 5.1 (what this app
+    // actually spawns), the latter serializes EnhancedKeyUsages as
+    // `{"value": [...], "Count": N}` instead of a plain array, which
+    // string_or_vec then silently collapses to empty — every certificate
+    // with a real EKU restriction showed "Any purpose" in the UI instead.
+    // Sorting happens before the conversion since Sort-Object -Property on
+    // a hashtable is a different (and here, unnecessary) question to answer.
     const LIST_CERTIFICATES_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
 $storePath = $env:ZAGZIG_CERT_STORE_PATH
 $now = Get-Date
-@(Get-ChildItem -LiteralPath $storePath | Select-Object Thumbprint, Subject, Issuer, SerialNumber, FriendlyName,
-    @{Name='NotBefore';Expression={ $_.NotBefore.ToString('yyyy-MM-dd') }},
-    @{Name='NotAfter';Expression={ $_.NotAfter.ToString('yyyy-MM-dd') }},
-    @{Name='HasPrivateKey';Expression={ [bool]$_.HasPrivateKey }},
-    @{Name='IsExpired';Expression={ [bool]($_.NotAfter -lt $now) }},
-    @{Name='EnhancedKeyUsages';Expression={ @($_.EnhancedKeyUsageList | ForEach-Object { $_.FriendlyName }) }}
-) | Sort-Object Subject | ConvertTo-Json -Depth 4 -Compress
+@(Get-ChildItem -LiteralPath $storePath | Sort-Object Subject | ForEach-Object {
+    [ordered]@{
+        Thumbprint = $_.Thumbprint
+        Subject = $_.Subject
+        Issuer = $_.Issuer
+        SerialNumber = $_.SerialNumber
+        FriendlyName = $_.FriendlyName
+        NotBefore = $_.NotBefore.ToString('yyyy-MM-dd')
+        NotAfter = $_.NotAfter.ToString('yyyy-MM-dd')
+        HasPrivateKey = [bool]$_.HasPrivateKey
+        IsExpired = [bool]($_.NotAfter -lt $now)
+        EnhancedKeyUsages = @(if ($_.EnhancedKeyUsageList) { $_.EnhancedKeyUsageList | ForEach-Object { $_.FriendlyName } })
+    }
+}) | ConvertTo-Json -Depth 4 -Compress
 "#;
 
     #[tauri::command]
