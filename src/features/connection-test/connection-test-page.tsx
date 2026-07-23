@@ -38,8 +38,18 @@ interface PingResult {
 interface TraceHop {
   hop: number;
   address: string | null;
+  hostname: string | null;
   roundtripTimeMs: number | null;
   status: string;
+}
+
+// Mirrors tracert.exe's own "name [ip]" formatting for a resolved hop, since
+// plenty of intermediate routers have a PTR record but no address alone
+// means much to a person reading it.
+function formatHopAddress(hop: TraceHop, t: TFunction): string {
+  if (!hop.address) return t("connectionTest.path.noResponse");
+  if (!hop.hostname) return hop.address;
+  return `${hop.hostname} [${hop.address}]`;
 }
 
 interface TracerouteResult {
@@ -212,9 +222,7 @@ function HopList({ hops, t }: { hops: TraceHop[]; t: TFunction }) {
           className="grid grid-cols-[3rem_1fr_5rem] gap-2 border-b px-3 py-2 text-sm last:border-b-0"
         >
           <span className="text-muted-foreground">{hop.hop}</span>
-          <span className="break-all">
-            {hop.address ?? t("connectionTest.path.noResponse")}
-          </span>
+          <span className="break-all">{formatHopAddress(hop, t)}</span>
           <span className="text-right text-muted-foreground">
             {hop.roundtripTimeMs !== null
               ? `${hop.roundtripTimeMs} ms`
@@ -297,7 +305,9 @@ function buildTraceLines(
   ];
   hops.forEach((hop) => {
     const time = hop.roundtripTimeMs !== null ? `${hop.roundtripTimeMs}ms` : "*";
-    const addr = hop.address ?? t("connectionTest.console.requestTimedOut");
+    const addr = hop.address
+      ? formatHopAddress(hop, t)
+      : t("connectionTest.console.requestTimedOut");
     lines.push(`${pad(String(hop.hop), 2)}  ${pad(time, 6)}  ${addr}`);
   });
   lines.push("");

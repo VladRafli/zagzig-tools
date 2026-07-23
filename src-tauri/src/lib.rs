@@ -696,6 +696,7 @@ $replies = 1..4 | ForEach-Object {
     pub struct TraceHop {
         pub hop: u32,
         pub address: Option<String>,
+        pub hostname: Option<String>,
         pub roundtrip_time_ms: Option<i64>,
         pub status: String,
     }
@@ -714,6 +715,8 @@ $replies = 1..4 | ForEach-Object {
         #[serde(default)]
         address: Option<String>,
         #[serde(default)]
+        hostname: Option<String>,
+        #[serde(default)]
         roundtrip_time_ms: Option<i64>,
         status: String,
     }
@@ -729,6 +732,13 @@ $replies = 1..4 | ForEach-Object {
     // Walks TTL from 1 upward, one ping each, recording whichever router
     // replies "time exceeded" at each hop until the target itself answers.
     // This is what traceroute/tracert do; .NET has no built-in for it.
+    //
+    // Each hop's address also gets a reverse-DNS (PTR) lookup, same as
+    // tracert.exe does by default (unlike tracert, there's no way to opt
+    // out here — if that turns out to matter, it'd need a UI toggle).
+    // -QuickTimeout keeps a hop with no PTR record from stalling the whole
+    // trace; the stopwatch stops before the lookup starts, so it never
+    // pollutes RoundtripTimeMs.
     const TRACEROUTE_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
 $targetHost = $env:ZAGZIG_CONN_TARGET
@@ -743,9 +753,20 @@ for ($ttl = 1; $ttl -le $maxHops; $ttl++) {
     try {
         $reply = $ping.Send($targetHost, $timeoutMs, $buffer, $options)
         $sw.Stop()
+        $address = if ($reply.Address) { $reply.Address.ToString() } else { $null }
+        $hostname = $null
+        if ($address) {
+            try {
+                $ptr = Resolve-DnsName -Name $address -Type PTR -DnsOnly -QuickTimeout -ErrorAction Stop
+                $hostname = $ptr | Select-Object -First 1 -ExpandProperty NameHost
+            } catch {
+                $hostname = $null
+            }
+        }
         $hops += [ordered]@{
             Hop = $ttl
-            Address = if ($reply.Address) { $reply.Address.ToString() } else { $null }
+            Address = $address
+            Hostname = $hostname
             RoundtripTimeMs = if ($reply.Status -eq 'Success' -or $reply.Status -eq 'TtlExpired') { $sw.ElapsedMilliseconds } else { $null }
             Status = $reply.Status.ToString()
         }
@@ -753,7 +774,7 @@ for ($ttl = 1; $ttl -le $maxHops; $ttl++) {
     } catch {
         $ex = $_.Exception
         while ($ex.InnerException) { $ex = $ex.InnerException }
-        $hops += [ordered]@{ Hop = $ttl; Address = $null; RoundtripTimeMs = $null; Status = $ex.Message }
+        $hops += [ordered]@{ Hop = $ttl; Address = $null; Hostname = $null; RoundtripTimeMs = $null; Status = $ex.Message }
         break
     }
 }
@@ -776,6 +797,7 @@ for ($ttl = 1; $ttl -le $maxHops; $ttl++) {
                 .map(|h| TraceHop {
                     hop: h.hop,
                     address: h.address,
+                    hostname: h.hostname,
                     roundtrip_time_ms: h.roundtrip_time_ms,
                     status: h.status,
                 })

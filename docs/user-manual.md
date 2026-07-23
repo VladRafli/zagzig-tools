@@ -129,7 +129,10 @@ CA restriction, and so on.
 Enter a hostname or IP and run a test to see:
 
 - **Is it reachable?** — 4 ICMP pings, with average reply time and how many were answered
-- **Path it took** — a traceroute-style hop list to the target
+- **Path it took** — a traceroute-style hop list to the target, with each hop's reverse-DNS
+  name shown alongside its address when one exists (`name [ip]`, the same convention
+  `tracert.exe` uses) — plenty of hops along the way have no PTR record, so this is normal
+  for at least some rows
 
 Both run from a single "Run test" action, and your last several tests are kept in a **History**
 list you can re-run or clear.
