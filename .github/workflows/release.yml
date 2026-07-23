@@ -47,18 +47,17 @@ jobs:
           releaseName: "zagzig-tools ${{ github.ref_name }}"
           # NOTE: this is a static, per-release description — update it
           # before tagging each release (it's plain text, not generated from
-          # commits/changelog). What's below describes v0.3.0 specifically.
+          # commits/changelog). What's below describes v0.3.1 specifically.
           releaseBody: |
-            ## What's new in v0.3.0
+            ## What's new in v0.3.1
 
-            - **DNS Cache** (new page under Network): view the resolver cache and flush it —
-              what `ipconfig /displaydns` / `ipconfig /flushdns` do, with no GUI anywhere in
-              Windows. Flushing doesn't need administrator rights.
-            - **Custom title bar**: the desktop app now draws its own window chrome (drag to
-              move, double-click to maximize, minimize/maximize/close buttons) instead of the
-              OS-native title bar, so it follows the app's own light/dark theme instead of
-              Windows' colors.
-            - The sidebar now shows the running app version, and the window opens maximized.
+            - **Fixed**: NRPT rules and certificates could silently show missing data — NRPT
+              rules with real DNS servers configured showed "—" for Name servers, and
+              certificates with a real Enhanced Key Usage restriction showed "Any purpose" in
+              Certificate Store. Both were a Windows PowerShell serialization issue, now fixed.
+            - Connection Test's traceroute now resolves each hop's hostname (`name [ip]`, the
+              same convention `tracert.exe` uses) instead of showing a bare IP.
+            - Relicensed from AGPL-3.0-or-later to MIT.
 
             See the assets below to download this release.
 
