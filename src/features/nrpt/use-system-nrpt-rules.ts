@@ -1,8 +1,12 @@
 import { useCachedInvoke } from "@/lib/use-cached-invoke";
 
-// Bumped to v2 to invalidate any rule data cached before NameServers was
-// fixed to serialize as plain strings instead of empty (see get_nrpt_rules).
-const CACHE_KEY = "zagzig:nrpt-rules:v2";
+// Bumped to v3 to invalidate any rule data cached before the *actual* fix
+// for empty NameServers landed (a40bb92: Windows PowerShell 5.1's
+// ConvertTo-Json wraps a Select-Object calculated array property as
+// `{"value": [...], "Count": N}` instead of a plain array — the v2 bump
+// predated that discovery and didn't fix anything on its own). See
+// get_nrpt_rules for the actual fix.
+const CACHE_KEY = "zagzig:nrpt-rules:v3";
 
 export interface SystemNrptRule {
   name: string;
