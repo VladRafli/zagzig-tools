@@ -288,14 +288,19 @@ denied, either run as root, grant the binary `CAP_NET_RAW`, or allow unprivilege
 
 ## 5. Staying up to date
 
-Both apps check this repo's latest GitHub release on startup.
+Both apps check this repo's latest GitHub release on startup, again automatically every hour in
+the background, and any time you ask them to.
 
-**Desktop app**: a button appears in the sidebar footer when a newer version exists, showing the
-version number. Click it to see release notes and an "Install and restart" button, which downloads
-the update, verifies it against a signing key baked into the app (via Tauri's updater plugin —
-cryptographically signed, not just downloaded over HTTPS), installs it, and restarts.
+**Desktop app**: the sidebar footer always has an update control. Most of the time it reads
+"Check for updates" — click it to check on demand (you'll get a toast either way: up to date, or
+couldn't check). When a newer version exists, that same spot turns into a prominent button showing
+the version number; click it to see release notes and an "Install and restart" button, which
+downloads the update, verifies it against a signing key baked into the app (via Tauri's updater
+plugin — cryptographically signed, not just downloaded over HTTPS), installs it, and restarts.
+Background checks (startup and hourly) stay silent unless they find something — no toast spam.
 
-**Terminal UI**: the status bar shows `update available: vX.Y.Z   u: install and restart` when one
+**Terminal UI**: press `u` at any time from the menu to check for updates on demand (shown in the
+status bar hint). The status bar shows `update available: vX.Y.Z   u: install and restart` when one
 exists. Press `u` to download and verify it (signed with a separate Ed25519 key via
 [zipsign](https://github.com/Kijewski/zipsign) — a different mechanism from the desktop app's, but
 the same idea: the download is rejected if it isn't signed by the matching key, not just trusted

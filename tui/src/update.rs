@@ -1,8 +1,13 @@
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use self_update::backends::github::Update;
 use self_update::cargo_crate_version;
 use self_update::update::ReleaseUpdate;
+
+// How often to silently re-check in the background, once the initial
+// startup check has settled. Matches the desktop app's interval.
+const CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 const REPO_OWNER: &str = "VladRafli";
 const REPO_NAME: &str = "zagzig-tools";
@@ -52,7 +57,28 @@ impl UpdateState {
             })),
         };
         state.spawn_check();
+        state.spawn_periodic_check();
         state
+    }
+
+    // Background hourly re-check. Only fires while idle/errored — if
+    // available or installing is already set, checking again would either
+    // be redundant or race an in-progress install, so it's skipped and
+    // picked back up on the next tick.
+    fn spawn_periodic_check(&self) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(CHECK_INTERVAL).await;
+                let should_check = {
+                    let shared = state.shared.lock().unwrap();
+                    !shared.checking && !shared.installing && shared.available.is_none()
+                };
+                if should_check {
+                    state.check_now();
+                }
+            }
+        });
     }
 
     fn spawn_check(&self) {
@@ -94,19 +120,18 @@ impl UpdateState {
         self.shared.lock().unwrap().error.clone()
     }
 
-    // Re-runs whichever step last failed: another check if the previous one
-    // never found a release to install, otherwise another install attempt.
-    pub fn retry(&self) {
-        let has_available = self.shared.lock().unwrap().available.is_some();
-        if has_available {
-            self.start_install();
-        } else {
-            let mut shared = self.shared.lock().unwrap();
-            shared.checking = true;
-            shared.error = None;
-            drop(shared);
-            self.spawn_check();
+    // Triggers a fresh check — used for the manual "check for updates" key
+    // as well as the periodic background re-check. No-op if one's already
+    // running.
+    pub fn check_now(&self) {
+        let mut shared = self.shared.lock().unwrap();
+        if shared.checking {
+            return;
         }
+        shared.checking = true;
+        shared.error = None;
+        drop(shared);
+        self.spawn_check();
     }
 
     // Downloads and installs the update in place (see self_replace's

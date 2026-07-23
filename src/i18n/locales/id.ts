@@ -39,6 +39,10 @@ const id: typeof en = {
       installing: "Mengunduh pembaruan…",
       installingProgress: "Mengunduh pembaruan… {{percent}}%",
       error: "Gagal memasang pembaruan: {{error}}",
+      checkForUpdates: "Periksa pembaruan",
+      checking: "Memeriksa pembaruan…",
+      upToDate: "Aplikasi sudah versi terbaru.",
+      checkError: "Gagal memeriksa pembaruan.",
     },
     titleBar: {
       minimize: "Perkecil",

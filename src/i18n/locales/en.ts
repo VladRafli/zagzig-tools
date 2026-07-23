@@ -37,6 +37,10 @@ const en = {
       installing: "Downloading update…",
       installingProgress: "Downloading update… {{percent}}%",
       error: "Couldn't install the update: {{error}}",
+      checkForUpdates: "Check for updates",
+      checking: "Checking for updates…",
+      upToDate: "You're up to date.",
+      checkError: "Couldn't check for updates.",
     },
     titleBar: {
       minimize: "Minimize",

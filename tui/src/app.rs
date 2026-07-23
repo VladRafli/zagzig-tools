@@ -70,10 +70,12 @@ impl App {
                 self.restart_requested = true;
                 self.should_quit = true;
             }
-            KeyCode::Char('u')
-                if self.update.available().is_some() || self.update.error().is_some() =>
-            {
-                self.update.retry();
+            KeyCode::Char('u') if !self.update.checking() && !self.update.installing() => {
+                if self.update.available().is_some() {
+                    self.update.start_install();
+                } else {
+                    self.update.check_now();
+                }
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 self.menu_index = self.menu_index.checked_sub(1).unwrap_or(MENU_ITEMS.len() - 1);
@@ -113,7 +115,9 @@ impl App {
             }
         }
         match self.focus {
-            Focus::Menu => "↑/↓ or j/k: move   enter/tab: open   q: quit".to_string(),
+            Focus::Menu => {
+                "↑/↓ or j/k: move   enter/tab: open   u: check for updates   q: quit".to_string()
+            }
             Focus::Content => match self.screen {
                 Screen::Dashboard => "esc: back".to_string(),
                 Screen::ConnectionTest => connection_test::HINT.to_string(),
