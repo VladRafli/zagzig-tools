@@ -47,16 +47,21 @@ jobs:
           releaseName: "zagzig-tools ${{ github.ref_name }}"
           # NOTE: this is a static, per-release description — update it
           # before tagging each release (it's plain text, not generated from
-          # commits/changelog). What's below describes v0.4.0 specifically.
+          # commits/changelog). What's below describes v0.5.0 specifically.
           releaseBody: |
-            ## What's new in v0.4.0
+            ## What's new in v0.5.0
 
-            - **SSH Config** (new page under Network): list, add, edit and remove the `Host`
-              entries in `~/.ssh/config`, with a raw editor for everything else. Edits only
-              touch the options the page manages. No administrator rights needed.
-            - **Hosts File**: drag entries by the grip handle to reorder them.
-            - The theme and language selectors now show their labels instead of raw values.
-            - You can check for updates manually, and the app re-checks hourly in the background.
+            - **WSL** (new page under Network): see which distributions are running, stop one,
+              set the default, shut WSL down, and edit `.wslconfig` (memory, processors, swap,
+              networking and more) with a form or a raw editor.
+            - **Force restart for a broken WSL**: when WSL hangs and `wsl --shutdown` doesn't
+              help, stop the WSL service, kill its leftover processes and start it again,
+              optionally restarting Docker Desktop too. There's also a standalone
+              "Restart Docker Desktop" button. WSL status checks now time out instead of
+              freezing the app.
+            - The webview's browser-style right-click menu is gone (it stays on text fields and
+              selected text).
+            - The user manual now covers SSH Config, WSL and drag-to-reorder in Hosts File.
 
             See the assets below to download this release.
 
