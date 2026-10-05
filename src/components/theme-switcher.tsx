@@ -23,7 +23,9 @@ export function ThemeSwitcher() {
       onValueChange={(value) => setTheme((value as ThemeOption) ?? "system")}
     >
       <SelectTrigger size="sm" className="w-full" aria-label={t("app.theme")}>
-        <SelectValue />
+        <SelectValue>
+          {(value: ThemeOption) => t(`theme.${value}`)}
+        </SelectValue>
       </SelectTrigger>
       <SelectContent>
         {THEME_OPTIONS.map((option) => (

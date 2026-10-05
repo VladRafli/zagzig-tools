@@ -23,7 +23,9 @@ export function LanguageSwitcher() {
       onValueChange={(value) => setLanguage(value as SupportedLanguage)}
     >
       <SelectTrigger size="sm" className="w-full">
-        <SelectValue />
+        <SelectValue>
+          {(value: SupportedLanguage) => LANGUAGE_NAMES[value] ?? value}
+        </SelectValue>
       </SelectTrigger>
       <SelectContent>
         {Object.entries(LANGUAGE_NAMES).map(([code, name]) => (
