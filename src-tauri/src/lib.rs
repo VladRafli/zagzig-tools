@@ -42,6 +42,14 @@ pub fn run() {
             ssh::update_ssh_host,
             ssh::remove_ssh_host,
             ssh::set_ssh_config_raw,
+            wsl::get_wsl_status,
+            wsl::wsl_terminate_distro,
+            wsl::wsl_set_default_distro,
+            wsl::wsl_shutdown,
+            wsl::wsl_force_restart,
+            wsl::restart_docker_desktop,
+            wsl::set_wsl_settings,
+            wsl::set_wsl_config_raw,
             proxy::get_winhttp_proxy,
             proxy::set_winhttp_proxy,
             proxy::reset_winhttp_proxy,
@@ -2406,6 +2414,775 @@ mod ssh {
                 proxy_jump: None,
             };
             assert!(managed_values(&input).is_err());
+        }
+    }
+}
+
+// Backs the "WSL" feature: lists distributions, terminates one or shuts the
+// whole WSL VM down (which is also how WSL "restarts" — it comes back up
+// lazily on next use, and that's when a changed `.wslconfig` takes effect),
+// and edits `%USERPROFILE%\.wslconfig`. All of it runs as the current user;
+// nothing needs elevation. `wsl.exe` writes its list output as UTF-16LE, so
+// it's spawned directly (not through PowerShell) and decoded here.
+mod wsl {
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    use serde::{Deserialize, Serialize};
+
+    use crate::{run_elevated, CREATE_NO_WINDOW};
+
+    struct WslOutput {
+        success: bool,
+        stdout: String,
+        stderr: String,
+    }
+
+    fn decode(bytes: &[u8]) -> String {
+        // wsl.exe emits UTF-16LE for most of its own messages, but passes
+        // through the distro's UTF-8 for anything it runs inside one. A NUL
+        // byte in the first few bytes is the tell for UTF-16.
+        if bytes.len() >= 2 && bytes.iter().take(8).any(|b| *b == 0) {
+            let units: Vec<u16> = bytes
+                .chunks_exact(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect();
+            String::from_utf16_lossy(&units)
+        } else {
+            String::from_utf8_lossy(bytes).into_owned()
+        }
+        .trim_start_matches('\u{feff}')
+        .to_string()
+    }
+
+    const TIMED_OUT: &str = "timed out";
+
+    // A broken WSL is exactly when `wsl.exe` hangs forever (the service
+    // never answers), so every call gets a deadline: on expiry the process
+    // is killed and a `TIMED_OUT` error comes back instead of blocking the
+    // worker thread — and the UI — indefinitely.
+    fn run_wsl_blocking(args: &[String], timeout: Duration) -> Result<WslOutput, String> {
+        use std::os::windows::process::CommandExt;
+        use std::process::{Command, Stdio};
+
+        let child = Command::new("wsl.exe")
+            .creation_flags(CREATE_NO_WINDOW)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|err| format!("failed to run wsl.exe: {err}"))?;
+        let pid = child.id();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(child.wait_with_output());
+        });
+
+        match rx.recv_timeout(timeout) {
+            Ok(Ok(output)) => Ok(WslOutput {
+                success: output.status.success(),
+                stdout: decode(&output.stdout),
+                stderr: decode(&output.stderr),
+            }),
+            Ok(Err(err)) => Err(format!("failed to run wsl.exe: {err}")),
+            Err(_) => {
+                let _ = Command::new("taskkill")
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .args(["/PID", &pid.to_string(), "/F"])
+                    .output();
+                Err(TIMED_OUT.to_string())
+            }
+        }
+    }
+
+    async fn run_wsl_with(args: &[&str], timeout: Duration) -> Result<WslOutput, String> {
+        let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+        tauri::async_runtime::spawn_blocking(move || run_wsl_blocking(&args, timeout))
+            .await
+            .map_err(|err| format!("wsl task failed to run: {err}"))?
+    }
+
+    async fn run_wsl(args: &[&str]) -> Result<WslOutput, String> {
+        run_wsl_with(args, Duration::from_secs(20)).await
+    }
+
+    fn failure_message(out: &WslOutput) -> String {
+        let text = if out.stderr.trim().is_empty() { &out.stdout } else { &out.stderr };
+        let text = text.replace('\0', "").trim().to_string();
+        if text.is_empty() {
+            "wsl.exe reported an error.".to_string()
+        } else {
+            text
+        }
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct WslDistro {
+        pub name: String,
+        pub running: bool,
+        pub version: String,
+        pub is_default: bool,
+    }
+
+    // Parses `wsl -l -v`. The header row is localized, so rows are read by
+    // position instead: last token is the version, the one before is the
+    // (localized) state, a leading `*` marks the default, and the rest is
+    // the name.
+    fn parse_distros(listing: &str, running: &[String]) -> Vec<WslDistro> {
+        listing
+            .lines()
+            .skip(1)
+            .filter_map(|line| {
+                let line = line.trim();
+                if line.is_empty() {
+                    return None;
+                }
+                let (is_default, rest) = match line.strip_prefix('*') {
+                    Some(rest) => (true, rest.trim()),
+                    None => (false, line),
+                };
+                let tokens: Vec<&str> = rest.split_whitespace().collect();
+                if tokens.len() < 3 {
+                    return None;
+                }
+                let version = tokens[tokens.len() - 1].to_string();
+                let name = tokens[..tokens.len() - 2].join(" ");
+                Some(WslDistro {
+                    running: running.iter().any(|r| r == &name),
+                    name,
+                    version,
+                    is_default,
+                })
+            })
+            .collect()
+    }
+
+    fn config_path() -> Result<PathBuf, String> {
+        let home = std::env::var("USERPROFILE")
+            .map_err(|_| "couldn't determine the user profile directory".to_string())?;
+        Ok(PathBuf::from(home).join(".wslconfig"))
+    }
+
+    fn read_config_raw() -> Result<String, String> {
+        match std::fs::read_to_string(config_path()?) {
+            Ok(raw) => Ok(raw),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+            Err(err) => Err(format!("failed to read .wslconfig: {err}")),
+        }
+    }
+
+    async fn read_config_blocking() -> Result<String, String> {
+        tauri::async_runtime::spawn_blocking(read_config_raw)
+            .await
+            .map_err(|err| format!("wslconfig read task failed to run: {err}"))?
+    }
+
+    async fn write_config_blocking(content: String) -> Result<(), String> {
+        tauri::async_runtime::spawn_blocking(move || {
+            std::fs::write(config_path()?, content).map_err(|err| format!("failed to write .wslconfig: {err}"))
+        })
+        .await
+        .map_err(|err| format!("wslconfig write task failed to run: {err}"))?
+    }
+
+    // The `[wsl2]` keys the UI manages, in display order.
+    const MANAGED_KEYS: [&str; 7] = [
+        "memory",
+        "processors",
+        "swap",
+        "localhostForwarding",
+        "networkingMode",
+        "autoMemoryReclaim",
+        "nestedVirtualization",
+    ];
+
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct WslSettings {
+        pub memory: Option<String>,
+        pub processors: Option<String>,
+        pub swap: Option<String>,
+        pub localhost_forwarding: Option<String>,
+        pub networking_mode: Option<String>,
+        pub auto_memory_reclaim: Option<String>,
+        pub nested_virtualization: Option<String>,
+    }
+
+    impl WslSettings {
+        fn as_array(&self) -> [&Option<String>; 7] {
+            [
+                &self.memory,
+                &self.processors,
+                &self.swap,
+                &self.localhost_forwarding,
+                &self.networking_mode,
+                &self.auto_memory_reclaim,
+                &self.nested_virtualization,
+            ]
+        }
+    }
+
+    // Returns the section name for a `[section]` line.
+    fn section_name(line: &str) -> Option<String> {
+        let t = line.trim();
+        let inner = t.strip_prefix('[')?.strip_suffix(']')?;
+        Some(inner.trim().to_ascii_lowercase())
+    }
+
+    fn key_of(line: &str) -> Option<(String, String)> {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') || t.starts_with(';') || t.starts_with('[') {
+            return None;
+        }
+        let (k, v) = t.split_once('=')?;
+        Some((k.trim().to_string(), v.trim().to_string()))
+    }
+
+    fn parse_settings(raw: &str) -> WslSettings {
+        let mut settings = WslSettings::default();
+        let mut in_wsl2 = false;
+        for line in raw.lines() {
+            if let Some(name) = section_name(line) {
+                in_wsl2 = name == "wsl2";
+                continue;
+            }
+            if !in_wsl2 {
+                continue;
+            }
+            let Some((key, value)) = key_of(line) else { continue };
+            let slot = match key.to_ascii_lowercase().as_str() {
+                "memory" => &mut settings.memory,
+                "processors" => &mut settings.processors,
+                "swap" => &mut settings.swap,
+                "localhostforwarding" => &mut settings.localhost_forwarding,
+                "networkingmode" => &mut settings.networking_mode,
+                "automemoryreclaim" => &mut settings.auto_memory_reclaim,
+                "nestedvirtualization" => &mut settings.nested_virtualization,
+                _ => continue,
+            };
+            if slot.is_none() {
+                *slot = Some(value);
+            }
+        }
+        settings
+    }
+
+    fn is_size(v: &str) -> bool {
+        let digits = v.chars().take_while(|c| c.is_ascii_digit()).count();
+        let unit = &v[digits..];
+        digits > 0 && ["", "B", "KB", "MB", "GB", "TB"].iter().any(|u| unit.eq_ignore_ascii_case(u))
+    }
+
+    fn validate(settings: &WslSettings) -> Result<(), String> {
+        let bad = |field: &str| Err(format!("Invalid value for {field}."));
+        if let Some(v) = &settings.memory {
+            if !is_size(v) {
+                return bad("memory (use e.g. 8GB)");
+            }
+        }
+        if let Some(v) = &settings.swap {
+            if !is_size(v) {
+                return bad("swap (use e.g. 4GB, or 0)");
+            }
+        }
+        if let Some(v) = &settings.processors {
+            if v.parse::<u32>().map_or(true, |n| n == 0) {
+                return bad("processors (a positive number)");
+            }
+        }
+        for (v, field) in [
+            (&settings.localhost_forwarding, "localhostForwarding"),
+            (&settings.nested_virtualization, "nestedVirtualization"),
+        ] {
+            if let Some(v) = v {
+                if v != "true" && v != "false" {
+                    return bad(field);
+                }
+            }
+        }
+        if let Some(v) = &settings.networking_mode {
+            if !["NAT", "mirrored", "bridged", "virtioproxy", "none"]
+                .iter()
+                .any(|m| m.eq_ignore_ascii_case(v))
+            {
+                return bad("networkingMode");
+            }
+        }
+        if let Some(v) = &settings.auto_memory_reclaim {
+            if !["disabled", "gradual", "dropcache"].iter().any(|m| m.eq_ignore_ascii_case(v)) {
+                return bad("autoMemoryReclaim");
+            }
+        }
+        Ok(())
+    }
+
+    // Rewrites the managed keys inside `[wsl2]` (adding the section if
+    // missing), keeping every other line, comment and section as it was.
+    fn apply_settings(raw: &str, settings: &WslSettings) -> String {
+        let values = settings.as_array();
+        let mut lines: Vec<String> = raw.lines().map(str::to_string).collect();
+
+        let start = lines
+            .iter()
+            .position(|l| section_name(l).as_deref() == Some("wsl2"));
+        let Some(start) = start else {
+            let mut block: Vec<String> = Vec::new();
+            for (key, value) in MANAGED_KEYS.iter().zip(values) {
+                if let Some(v) = value {
+                    block.push(format!("{key}={v}"));
+                }
+            }
+            if block.is_empty() {
+                return raw.to_string();
+            }
+            if !lines.is_empty() && !lines.last().is_some_and(|l| l.trim().is_empty()) {
+                lines.push(String::new());
+            }
+            lines.push("[wsl2]".to_string());
+            lines.extend(block);
+            return format!("{}\n", lines.join("\n"));
+        };
+        let end = lines[start + 1..]
+            .iter()
+            .position(|l| section_name(l).is_some())
+            .map_or(lines.len(), |p| start + 1 + p);
+
+        let mut written = [false; 7];
+        let mut out: Vec<String> = lines[..=start].to_vec();
+        for line in &lines[start + 1..end] {
+            let slot = key_of(line)
+                .and_then(|(k, _)| MANAGED_KEYS.iter().position(|m| m.eq_ignore_ascii_case(&k)));
+            match slot {
+                Some(i) => {
+                    if written[i] {
+                        continue;
+                    }
+                    written[i] = true;
+                    if let Some(v) = values[i] {
+                        out.push(format!("{}={v}", MANAGED_KEYS[i]));
+                    }
+                }
+                None => out.push(line.clone()),
+            }
+        }
+        // New keys go after the last non-blank line of the section.
+        let mut insert_at = out.len();
+        while insert_at > start + 1 && out[insert_at - 1].trim().is_empty() {
+            insert_at -= 1;
+        }
+        let mut inserted = 0;
+        for (i, value) in values.iter().enumerate() {
+            if written[i] {
+                continue;
+            }
+            if let Some(v) = value {
+                out.insert(insert_at + inserted, format!("{}={v}", MANAGED_KEYS[i]));
+                inserted += 1;
+            }
+        }
+        out.extend(lines[end..].iter().cloned());
+        format!("{}\n", out.join("\n"))
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct WslStatus {
+        pub installed: bool,
+        // True when wsl.exe didn't answer in time — the "WSL is broken"
+        // state the force restart exists for.
+        pub unresponsive: bool,
+        pub docker_desktop: DockerDesktop,
+        pub distros: Vec<WslDistro>,
+        pub settings: WslSettings,
+        pub raw_config: String,
+    }
+
+    #[tauri::command]
+    pub async fn get_wsl_status() -> Result<WslStatus, String> {
+        let raw_config = read_config_blocking().await?;
+        let settings = parse_settings(&raw_config);
+        let docker_desktop = docker_state().await;
+
+        let listing = match run_wsl(&["--list", "--verbose"]).await {
+            Ok(out) if out.success => out,
+            other => {
+                // Timed out → WSL is installed but hung. Anything else:
+                // wsl.exe missing, or present but with no WSL installed yet.
+                let unresponsive = matches!(&other, Err(e) if e == TIMED_OUT);
+                return Ok(WslStatus {
+                    installed: unresponsive,
+                    unresponsive,
+                    docker_desktop,
+                    distros: Vec::new(),
+                    settings,
+                    raw_config,
+                });
+            }
+        };
+        let running: Vec<String> = match run_wsl(&["--list", "--running", "--quiet"]).await {
+            Ok(out) if out.success => out
+                .stdout
+                .lines()
+                .map(|l| l.trim().trim_start_matches('*').trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect(),
+            _ => Vec::new(),
+        };
+        Ok(WslStatus {
+            installed: true,
+            unresponsive: false,
+            docker_desktop,
+            distros: parse_distros(&listing.stdout, &running),
+            settings,
+            raw_config,
+        })
+    }
+
+    // Only names that `wsl -l` itself reports are passed back to wsl.exe, so
+    // a crafted name can't turn into an extra option.
+    async fn known_distro(name: &str) -> Result<(), String> {
+        let out = run_wsl(&["--list", "--verbose"]).await?;
+        if out.success && parse_distros(&out.stdout, &[]).iter().any(|d| d.name == name) {
+            Ok(())
+        } else {
+            Err("That distribution no longer exists — refresh and try again.".to_string())
+        }
+    }
+
+    async fn run_checked(args: &[&str]) -> Result<(), String> {
+        let out = run_wsl(args).await?;
+        if out.success {
+            Ok(())
+        } else {
+            Err(failure_message(&out))
+        }
+    }
+
+    #[tauri::command]
+    pub async fn wsl_terminate_distro(name: String) -> Result<(), String> {
+        known_distro(&name).await?;
+        run_checked(&["--terminate", &name]).await
+    }
+
+    #[tauri::command]
+    pub async fn wsl_set_default_distro(name: String) -> Result<(), String> {
+        known_distro(&name).await?;
+        run_checked(&["--set-default", &name]).await
+    }
+
+    #[tauri::command]
+    pub async fn wsl_shutdown() -> Result<(), String> {
+        run_checked(&["--shutdown"]).await
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct ElevatedResult {
+        success: bool,
+        #[serde(default)]
+        error: Option<String>,
+        #[serde(default)]
+        killed: Vec<String>,
+    }
+
+    // For when `wsl --shutdown` itself hangs or fails: stops the WSL
+    // service(s) (which tears down the VM and every distro), then kills
+    // whatever processes are still left, then starts the services again.
+    // `WSLService` is the Store/"WSL 2 package" service, `LxssManager` the
+    // inbox one — whichever exist are handled. Processes that are already
+    // gone, or refuse to die, aren't errors; only the service stop is.
+    const FORCE_KILL_WORKER_SCRIPT: &str = r#"
+param(
+    [Parameter(Mandatory)] [string]$InputPath,
+    [Parameter(Mandatory)] [string]$OutputPath
+)
+$ErrorActionPreference = 'Stop'
+try {
+    $serviceNames = @('WSLService', 'LxssManager') | Where-Object { Get-Service -Name $_ -ErrorAction SilentlyContinue }
+    foreach ($name in $serviceNames) {
+        Stop-Service -Name $name -Force -ErrorAction Stop
+    }
+    $killed = @()
+    foreach ($name in @('wsl', 'wslhost', 'wslrelay', 'wslservice', 'wslg', 'vmmem', 'vmmemWSL')) {
+        $procs = Get-Process -Name $name -ErrorAction SilentlyContinue
+        foreach ($p in $procs) {
+            try { $p | Stop-Process -Force -ErrorAction Stop; $killed += $name } catch {}
+        }
+    }
+    foreach ($name in $serviceNames) {
+        Start-Service -Name $name -ErrorAction SilentlyContinue
+    }
+    @{ Success = $true; Killed = @($killed | Select-Object -Unique) } | ConvertTo-Json -Compress | Set-Content -LiteralPath $OutputPath
+} catch {
+    $ex = $_.Exception
+    while ($ex.InnerException) { $ex = $ex.InnerException }
+    @{ Success = $false; Error = $ex.Message } | ConvertTo-Json -Compress | Set-Content -LiteralPath $OutputPath
+}
+"#;
+
+    #[derive(Debug, Clone, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct DockerDesktop {
+        pub installed: bool,
+        pub running: bool,
+    }
+
+    // Docker Desktop's WSL backend lives in its own `docker-desktop`
+    // distro, and it's Docker Desktop (not WSL) that recreates and rewires
+    // it — so a broken WSL usually needs Docker Desktop restarted as well.
+    fn docker_exe() -> Option<PathBuf> {
+        ["ProgramFiles", "ProgramW6432"]
+            .iter()
+            .filter_map(|var| std::env::var(var).ok())
+            .map(|dir| PathBuf::from(dir).join("Docker").join("Docker").join("Docker Desktop.exe"))
+            .find(|path| path.exists())
+    }
+
+    // Everything Docker Desktop runs as the current user. (Its Windows
+    // service, `com.docker.service`, is left alone — it's what Docker
+    // Desktop itself talks to on startup.)
+    const DOCKER_PROCESSES: [&str; 5] = [
+        "Docker Desktop.exe",
+        "com.docker.backend.exe",
+        "com.docker.build.exe",
+        "com.docker.dev-envs.exe",
+        "vpnkit.exe",
+    ];
+
+    fn docker_running_blocking() -> bool {
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new("tasklist")
+            .creation_flags(CREATE_NO_WINDOW)
+            .args(["/FI", "IMAGENAME eq Docker Desktop.exe", "/FO", "CSV", "/NH"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains("Docker Desktop.exe"))
+            .unwrap_or(false)
+    }
+
+    async fn docker_state() -> DockerDesktop {
+        let running = tauri::async_runtime::spawn_blocking(docker_running_blocking)
+            .await
+            .unwrap_or(false);
+        DockerDesktop {
+            installed: docker_exe().is_some(),
+            running,
+        }
+    }
+
+    fn stop_docker_blocking() {
+        use std::os::windows::process::CommandExt;
+        for name in DOCKER_PROCESSES {
+            let _ = std::process::Command::new("taskkill")
+                .creation_flags(CREATE_NO_WINDOW)
+                .args(["/F", "/T", "/IM", name])
+                .output();
+        }
+    }
+
+    fn start_docker_blocking() -> Result<(), String> {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        let exe = docker_exe().ok_or_else(|| "Docker Desktop isn't installed.".to_string())?;
+        std::process::Command::new(exe)
+            .creation_flags(DETACHED_PROCESS)
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| format!("failed to start Docker Desktop: {err}"))
+    }
+
+    async fn stop_docker() {
+        let _ = tauri::async_runtime::spawn_blocking(stop_docker_blocking).await;
+    }
+
+    async fn start_docker() -> Result<(), String> {
+        tauri::async_runtime::spawn_blocking(start_docker_blocking)
+            .await
+            .map_err(|err| format!("docker start task failed to run: {err}"))?
+    }
+
+    #[tauri::command]
+    pub async fn restart_docker_desktop() -> Result<(), String> {
+        if docker_exe().is_none() {
+            return Err("Docker Desktop isn't installed.".to_string());
+        }
+        stop_docker().await;
+        sleep_off_worker(Duration::from_secs(3)).await;
+        start_docker().await
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ForceRestartResult {
+        pub killed: Vec<String>,
+        pub started: Vec<String>,
+        pub failed_to_start: Vec<String>,
+        pub docker_restarted: bool,
+        pub docker_error: Option<String>,
+    }
+
+    // Best effort, never blocking for long: names of distros that were
+    // running before the restart, so they can be brought back after it.
+    async fn running_distros_before() -> Vec<String> {
+        match run_wsl_with(&["--list", "--running", "--quiet"], Duration::from_secs(5)).await {
+            Ok(out) if out.success => out
+                .stdout
+                .lines()
+                .map(|l| l.trim().trim_start_matches('*').trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    #[tauri::command]
+    pub async fn wsl_force_restart(restart_docker: bool) -> Result<ForceRestartResult, String> {
+        let mut to_restart = running_distros_before().await;
+
+        // Docker Desktop goes first so it isn't fighting the service stop
+        // (or respawning its distro) while WSL is torn down, and its own
+        // distro isn't started by hand below — Docker recreates it.
+        let restart_docker = restart_docker && docker_exe().is_some();
+        if restart_docker {
+            stop_docker().await;
+            to_restart.retain(|name| !name.to_ascii_lowercase().starts_with("docker-desktop"));
+        }
+
+        // Elevated: stopping the service and killing vmmem needs admin.
+        let raw = run_elevated(FORCE_KILL_WORKER_SCRIPT, "").await?;
+        let parsed: ElevatedResult = serde_json::from_str(&raw)
+            .map_err(|err| format!("failed to parse powershell output: {err}"))?;
+        if !parsed.success {
+            return Err(parsed.error.unwrap_or_else(|| "Unknown error.".to_string()));
+        }
+
+        // Give the service a moment to come back up before poking it.
+        sleep_off_worker(Duration::from_secs(3)).await;
+
+        // Started unelevated on purpose — a distro launched from here would
+        // otherwise run in an elevated context. With nothing known to be
+        // running (the usual case when WSL was too broken to answer), start
+        // the default distro, which also brings the WSL VM itself back.
+        let mut started = Vec::new();
+        let mut failed_to_start = Vec::new();
+        let targets: Vec<Option<String>> = if to_restart.is_empty() {
+            // (With Docker Desktop restarting, the default distro still
+            // brings the VM up before Docker starts.)
+            vec![None]
+        } else {
+            to_restart.into_iter().map(Some).collect()
+        };
+        for target in targets {
+            let label = target.clone().unwrap_or_else(|| "(default)".to_string());
+            let args: Vec<&str> = match &target {
+                Some(name) => vec!["--distribution", name, "--exec", "true"],
+                None => vec!["--exec", "true"],
+            };
+            match run_wsl_with(&args, Duration::from_secs(60)).await {
+                Ok(out) if out.success => started.push(label),
+                _ => failed_to_start.push(label),
+            }
+        }
+
+        let (docker_restarted, docker_error) = if restart_docker {
+            match start_docker().await {
+                Ok(()) => (true, None),
+                Err(err) => (false, Some(err)),
+            }
+        } else {
+            (false, None)
+        };
+
+        Ok(ForceRestartResult {
+            killed: parsed.killed,
+            started,
+            failed_to_start,
+            docker_restarted,
+            docker_error,
+        })
+    }
+
+    async fn sleep_off_worker(duration: Duration) {
+        let _ = tauri::async_runtime::spawn_blocking(move || std::thread::sleep(duration)).await;
+    }
+
+    #[tauri::command]
+    pub async fn set_wsl_settings(settings: WslSettings) -> Result<(), String> {
+        let settings = WslSettings {
+            memory: normalize(settings.memory),
+            processors: normalize(settings.processors),
+            swap: normalize(settings.swap),
+            localhost_forwarding: normalize(settings.localhost_forwarding),
+            networking_mode: normalize(settings.networking_mode),
+            auto_memory_reclaim: normalize(settings.auto_memory_reclaim),
+            nested_virtualization: normalize(settings.nested_virtualization),
+        };
+        validate(&settings)?;
+        let raw = read_config_blocking().await?;
+        write_config_blocking(apply_settings(&raw, &settings)).await
+    }
+
+    fn normalize(value: Option<String>) -> Option<String> {
+        value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+    }
+
+    #[tauri::command]
+    pub async fn set_wsl_config_raw(content: String) -> Result<(), String> {
+        write_config_blocking(content).await
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn parses_distro_listing() {
+            let listing = "  NAME            STATE           VERSION\n* Ubuntu          Running         2\n  docker-desktop  Stopped         2\n";
+            let running = vec!["Ubuntu".to_string()];
+            let d = parse_distros(listing, &running);
+            assert_eq!(d.len(), 2);
+            assert!(d[0].is_default && d[0].running && d[0].version == "2");
+            assert!(!d[1].is_default && !d[1].running && d[1].name == "docker-desktop");
+        }
+
+        #[test]
+        fn decodes_utf16() {
+            let bytes: Vec<u8> = "Hi\n".encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+            assert_eq!(decode(&bytes), "Hi\n");
+        }
+
+        #[test]
+        fn applies_settings_preserving_others() {
+            let raw = "[wsl2]\n# keep me\nmemory=4GB\nkernel=C:\\\\k\n\n[experimental]\nsparseVhd=true\n";
+            let settings = WslSettings {
+                memory: Some("8GB".into()),
+                processors: Some("4".into()),
+                ..Default::default()
+            };
+            let out = apply_settings(raw, &settings);
+            assert_eq!(
+                out,
+                "[wsl2]\n# keep me\nmemory=8GB\nkernel=C:\\\\k\nprocessors=4\n\n[experimental]\nsparseVhd=true\n"
+            );
+            assert_eq!(parse_settings(&out).processors.as_deref(), Some("4"));
+        }
+
+        #[test]
+        fn creates_section_and_removes_keys() {
+            let s = WslSettings { memory: Some("2GB".into()), ..Default::default() };
+            assert_eq!(apply_settings("", &s), "[wsl2]\nmemory=2GB\n");
+            let cleared = apply_settings("[wsl2]\nmemory=2GB\n", &WslSettings::default());
+            assert_eq!(cleared, "[wsl2]\n");
+        }
+
+        #[test]
+        fn validates_values() {
+            let ok = WslSettings { memory: Some("8GB".into()), swap: Some("0".into()), ..Default::default() };
+            assert!(validate(&ok).is_ok());
+            let bad = WslSettings { memory: Some("8GB\nkernel=x".into()), ..Default::default() };
+            assert!(validate(&bad).is_err());
         }
     }
 }

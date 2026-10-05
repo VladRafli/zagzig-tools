@@ -12,6 +12,7 @@ import {
   Terminal,
   Timer,
   Waypoints,
+  Boxes,
 } from "lucide-react";
 
 export interface NavItem {
@@ -35,6 +36,7 @@ export type NavId =
   | "dns-monitor"
   | "hosts-file"
   | "ssh-config"
+  | "wsl"
   | "proxy-settings"
   | "code-signing"
   | "certificate-store";
@@ -57,6 +59,7 @@ export const navGroups: NavGroup[] = [
       { id: "dns-monitor", labelKey: "nav.dnsMonitor", icon: Timer },
       { id: "hosts-file", labelKey: "nav.hostsFile", icon: FileCog },
       { id: "ssh-config", labelKey: "nav.sshConfig", icon: Terminal },
+      { id: "wsl", labelKey: "nav.wsl", icon: Boxes },
       { id: "proxy-settings", labelKey: "nav.proxySettings", icon: Waypoints },
     ],
   },
