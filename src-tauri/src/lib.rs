@@ -36,6 +36,12 @@ pub fn run() {
             hosts::remove_hosts_entry,
             hosts::set_hosts_entry_enabled,
             hosts::set_hosts_raw,
+            hosts::move_hosts_entry,
+            ssh::get_ssh_hosts,
+            ssh::add_ssh_host,
+            ssh::update_ssh_host,
+            ssh::remove_ssh_host,
+            ssh::set_ssh_config_raw,
             proxy::get_winhttp_proxy,
             proxy::set_winhttp_proxy,
             proxy::reset_winhttp_proxy,
@@ -1966,9 +1972,441 @@ try {
         write_hosts_raw(new_content).await
     }
 
+    // Moves the entry at `line_number` so it lands where the entry at
+    // `target_line_number` currently is: above it when dragged upwards, below
+    // it when dragged downwards. Either way that's index `target` once the
+    // moved line has been taken out.
+    #[tauri::command]
+    pub async fn move_hosts_entry(line_number: usize, target_line_number: usize) -> Result<(), String> {
+        if line_number == target_line_number {
+            return Ok(());
+        }
+        let raw = tauri::async_runtime::spawn_blocking(read_hosts_raw)
+            .await
+            .map_err(|err| format!("hosts read task failed to run: {err}"))??;
+
+        let mut lines: Vec<&str> = raw.lines().collect();
+        if line_number >= lines.len() || target_line_number >= lines.len() {
+            return Err("That entry no longer exists — refresh and try again.".to_string());
+        }
+        let moved = lines.remove(line_number);
+        lines.insert(target_line_number, moved);
+
+        write_hosts_raw(format!("{}\n", lines.join("\n"))).await
+    }
+
     #[tauri::command]
     pub async fn set_hosts_raw(content: String) -> Result<(), String> {
         write_hosts_raw(content).await
+    }
+}
+
+// Backs the "SSH Config" feature: `~/.ssh/config` holds the `Host` aliases
+// OpenSSH expands before connecting. It's owned by the current user, so —
+// unlike the Windows hosts file — nothing here needs elevation. A `Host`
+// block runs from its `Host` line up to the next `Host`/`Match` line; edits
+// only touch the keys the UI knows about and leave every other line alone.
+mod ssh {
+    use std::path::PathBuf;
+
+    use serde::{Deserialize, Serialize};
+
+    fn config_path() -> Result<PathBuf, String> {
+        let home = std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .map_err(|_| "couldn't determine the user profile directory".to_string())?;
+        Ok(PathBuf::from(home).join(".ssh").join("config"))
+    }
+
+    fn read_config_raw() -> Result<String, String> {
+        let path = config_path()?;
+        match std::fs::read_to_string(&path) {
+            Ok(raw) => Ok(raw),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+            Err(err) => Err(format!("failed to read ssh config: {err}")),
+        }
+    }
+
+    fn write_config_raw(content: &str) -> Result<(), String> {
+        let path = config_path()?;
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)
+                .map_err(|err| format!("failed to create .ssh directory: {err}"))?;
+        }
+        std::fs::write(&path, content).map_err(|err| format!("failed to write ssh config: {err}"))
+    }
+
+    async fn read_blocking() -> Result<String, String> {
+        tauri::async_runtime::spawn_blocking(read_config_raw)
+            .await
+            .map_err(|err| format!("ssh config read task failed to run: {err}"))?
+    }
+
+    async fn write_blocking(content: String) -> Result<(), String> {
+        tauri::async_runtime::spawn_blocking(move || write_config_raw(&content))
+            .await
+            .map_err(|err| format!("ssh config write task failed to run: {err}"))?
+    }
+
+    // Splits "Key value", "Key=value" or "Key = value" into (key, value),
+    // with surrounding quotes stripped from the value.
+    fn split_directive(line: &str) -> Option<(String, String)> {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            return None;
+        }
+        let idx = trimmed.find(|c: char| c.is_whitespace() || c == '=')?;
+        let key = &trimmed[..idx];
+        let value = trimmed[idx..]
+            .trim_start_matches(|c: char| c.is_whitespace() || c == '=')
+            .trim();
+        let value = value
+            .strip_prefix('"')
+            .and_then(|v| v.strip_suffix('"'))
+            .unwrap_or(value);
+        Some((key.to_string(), value.to_string()))
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SshHost {
+        pub line_number: usize,
+        pub patterns: Vec<String>,
+        pub host_name: Option<String>,
+        pub user: Option<String>,
+        pub port: Option<String>,
+        pub identity_file: Option<String>,
+        pub proxy_jump: Option<String>,
+        pub other_options: usize,
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SshConfig {
+        pub raw: String,
+        pub hosts: Vec<SshHost>,
+    }
+
+    // Returns (start, end) line ranges, end exclusive, of each `Host` block.
+    fn host_blocks(lines: &[&str]) -> Vec<(usize, usize)> {
+        let mut blocks = Vec::new();
+        let mut current: Option<usize> = None;
+        for (i, line) in lines.iter().enumerate() {
+            let keyword = split_directive(line).map(|(k, _)| k.to_ascii_lowercase());
+            match keyword.as_deref() {
+                Some("host") => {
+                    if let Some(start) = current.take() {
+                        blocks.push((start, i));
+                    }
+                    current = Some(i);
+                }
+                Some("match") => {
+                    if let Some(start) = current.take() {
+                        blocks.push((start, i));
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(start) = current {
+            blocks.push((start, lines.len()));
+        }
+        blocks
+    }
+
+    fn parse_hosts(raw: &str) -> Vec<SshHost> {
+        let lines: Vec<&str> = raw.lines().collect();
+        host_blocks(&lines)
+            .into_iter()
+            .map(|(start, end)| {
+                let patterns = split_directive(lines[start])
+                    .map(|(_, v)| v.split_whitespace().map(str::to_string).collect())
+                    .unwrap_or_default();
+                let mut host = SshHost {
+                    line_number: start,
+                    patterns,
+                    host_name: None,
+                    user: None,
+                    port: None,
+                    identity_file: None,
+                    proxy_jump: None,
+                    other_options: 0,
+                };
+                for line in &lines[start + 1..end] {
+                    let Some((key, value)) = split_directive(line) else {
+                        continue;
+                    };
+                    let slot = match key.to_ascii_lowercase().as_str() {
+                        "hostname" => &mut host.host_name,
+                        "user" => &mut host.user,
+                        "port" => &mut host.port,
+                        "identityfile" => &mut host.identity_file,
+                        "proxyjump" => &mut host.proxy_jump,
+                        _ => {
+                            host.other_options += 1;
+                            continue;
+                        }
+                    };
+                    if slot.is_none() {
+                        *slot = Some(value);
+                    }
+                }
+                host
+            })
+            .collect()
+    }
+
+    #[tauri::command]
+    pub async fn get_ssh_hosts() -> Result<SshConfig, String> {
+        let raw = read_blocking().await?;
+        let hosts = parse_hosts(&raw);
+        Ok(SshConfig { raw, hosts })
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SshHostInput {
+        pub patterns: String,
+        pub host_name: Option<String>,
+        pub user: Option<String>,
+        pub port: Option<String>,
+        pub identity_file: Option<String>,
+        pub proxy_jump: Option<String>,
+    }
+
+    fn clean(value: &Option<String>, field: &str, allow_spaces: bool) -> Result<Option<String>, String> {
+        let Some(v) = value.as_deref().map(str::trim).filter(|v| !v.is_empty()) else {
+            return Ok(None);
+        };
+        // Newlines would let a value smuggle in extra directives (e.g. a
+        // ProxyCommand), so control characters are never allowed.
+        if v.chars().any(char::is_control) || v.contains('"') {
+            return Err(format!("{field} contains characters that aren't allowed."));
+        }
+        if !allow_spaces && v.chars().any(char::is_whitespace) {
+            return Err(format!("{field} can't contain spaces."));
+        }
+        Ok(Some(v.to_string()))
+    }
+
+    // Index order matches MANAGED_KEYS.
+    const MANAGED_KEYS: [&str; 5] = ["HostName", "User", "Port", "IdentityFile", "ProxyJump"];
+
+    fn managed_values(input: &SshHostInput) -> Result<(String, [Option<String>; 5]), String> {
+        let patterns = input.patterns.split_whitespace().collect::<Vec<_>>();
+        if patterns.is_empty() {
+            return Err("Enter a host alias.".to_string());
+        }
+        if input.patterns.chars().any(char::is_control) || input.patterns.contains('"') {
+            return Err("The host alias contains characters that aren't allowed.".to_string());
+        }
+        let port = clean(&input.port, "Port", false)?;
+        if let Some(p) = &port {
+            if p.parse::<u16>().map_or(true, |n| n == 0) {
+                return Err("Port must be a number between 1 and 65535.".to_string());
+            }
+        }
+        let identity = clean(&input.identity_file, "Identity file", true)?.map(|v| {
+            if v.contains(char::is_whitespace) {
+                format!("\"{v}\"")
+            } else {
+                v
+            }
+        });
+        Ok((
+            patterns.join(" "),
+            [
+                clean(&input.host_name, "Hostname", false)?,
+                clean(&input.user, "User", false)?,
+                port,
+                identity,
+                clean(&input.proxy_jump, "Proxy jump", false)?,
+            ],
+        ))
+    }
+
+    fn join_lines(lines: &[String]) -> String {
+        if lines.is_empty() {
+            String::new()
+        } else {
+            format!("{}\n", lines.join("\n"))
+        }
+    }
+
+    fn normalized_patterns(line: &str) -> String {
+        split_directive(line)
+            .map(|(_, v)| v.split_whitespace().collect::<Vec<_>>().join(" "))
+            .unwrap_or_default()
+    }
+
+    // Finds the block that starts at `line_number`, verifying it's still the
+    // same host the UI was showing (the file may have changed since).
+    fn find_block(
+        lines: &[&str],
+        line_number: usize,
+        original_patterns: &str,
+    ) -> Result<(usize, usize), String> {
+        let stale = || "That host changed on disk — refresh and try again.".to_string();
+        let (start, end) = host_blocks(lines)
+            .into_iter()
+            .find(|(start, _)| *start == line_number)
+            .ok_or_else(stale)?;
+        if normalized_patterns(lines[start]) != original_patterns {
+            return Err(stale());
+        }
+        Ok((start, end))
+    }
+
+    #[tauri::command]
+    pub async fn add_ssh_host(input: SshHostInput) -> Result<(), String> {
+        let (patterns, values) = managed_values(&input)?;
+        let raw = read_blocking().await?;
+
+        if parse_hosts(&raw)
+            .iter()
+            .any(|h| h.patterns.join(" ").eq_ignore_ascii_case(&patterns))
+        {
+            return Err("A host with that alias already exists.".to_string());
+        }
+
+        let mut out = raw;
+        if !out.is_empty() {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push('\n');
+        }
+        out.push_str(&format!("Host {patterns}\n"));
+        for (key, value) in MANAGED_KEYS.iter().zip(values) {
+            if let Some(v) = value {
+                out.push_str(&format!("    {key} {v}\n"));
+            }
+        }
+        write_blocking(out).await
+    }
+
+    #[tauri::command]
+    pub async fn update_ssh_host(
+        line_number: usize,
+        original_patterns: String,
+        input: SshHostInput,
+    ) -> Result<(), String> {
+        let (patterns, values) = managed_values(&input)?;
+        let raw = read_blocking().await?;
+        let lines: Vec<&str> = raw.lines().collect();
+        let (start, end) = find_block(&lines, line_number, &original_patterns)?;
+
+        let indent = lines[start + 1..end]
+            .iter()
+            .find(|l| split_directive(l).is_some())
+            .map(|l| l[..l.len() - l.trim_start().len()].to_string())
+            .unwrap_or_else(|| "    ".to_string());
+
+        let mut out: Vec<String> = lines[..start].iter().map(|l| l.to_string()).collect();
+        out.push(format!("Host {patterns}"));
+
+        // Existing lines for managed keys are rewritten in place (extra
+        // duplicates dropped); unmanaged lines and comments pass through.
+        let mut written = [false; 5];
+        for line in &lines[start + 1..end] {
+            let slot = split_directive(line).and_then(|(k, _)| {
+                MANAGED_KEYS
+                    .iter()
+                    .position(|m| m.eq_ignore_ascii_case(&k))
+            });
+            match slot {
+                Some(i) => {
+                    if written[i] {
+                        continue;
+                    }
+                    written[i] = true;
+                    if let Some(v) = &values[i] {
+                        out.push(format!("{indent}{} {v}", MANAGED_KEYS[i]));
+                    }
+                }
+                None => out.push(line.to_string()),
+            }
+        }
+
+        // Newly set keys go right after the existing content of the block,
+        // above any trailing blank separator lines.
+        let mut insert_at = out.len();
+        while insert_at > start + 1 && out[insert_at - 1].trim().is_empty() {
+            insert_at -= 1;
+        }
+        let mut inserted = 0;
+        for (i, value) in values.iter().enumerate() {
+            if written[i] {
+                continue;
+            }
+            if let Some(v) = value {
+                out.insert(insert_at + inserted, format!("{indent}{} {v}", MANAGED_KEYS[i]));
+                inserted += 1;
+            }
+        }
+
+        out.extend(lines[end..].iter().map(|l| l.to_string()));
+        write_blocking(join_lines(&out)).await
+    }
+
+    #[tauri::command]
+    pub async fn remove_ssh_host(line_number: usize, original_patterns: String) -> Result<(), String> {
+        let raw = read_blocking().await?;
+        let lines: Vec<&str> = raw.lines().collect();
+        let (start, mut end) = find_block(&lines, line_number, &original_patterns)?;
+
+        // Keep the blank separator after the block with whatever follows,
+        // rather than deleting it along with the block.
+        while end > start + 1 && lines[end - 1].trim().is_empty() {
+            end -= 1;
+        }
+        let out: Vec<String> = lines[..start]
+            .iter()
+            .chain(lines[end..].iter())
+            .map(|l| l.to_string())
+            .collect();
+        write_blocking(join_lines(&out)).await
+    }
+
+    #[tauri::command]
+    pub async fn set_ssh_config_raw(content: String) -> Result<(), String> {
+        write_blocking(content).await
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        const SAMPLE: &str = "# my hosts\nHost prod\n    HostName 10.0.0.1\n    User deploy\n    ForwardAgent yes\n\nHost *\n    ServerAliveInterval 30\n";
+
+        #[test]
+        fn parses_blocks() {
+            let hosts = parse_hosts(SAMPLE);
+            assert_eq!(hosts.len(), 2);
+            assert_eq!(hosts[0].patterns, vec!["prod"]);
+            assert_eq!(hosts[0].host_name.as_deref(), Some("10.0.0.1"));
+            assert_eq!(hosts[0].other_options, 1);
+            assert_eq!(hosts[1].patterns, vec!["*"]);
+        }
+
+        #[test]
+        fn parses_equals_and_quotes() {
+            let hosts = parse_hosts("Host a\n  IdentityFile = \"C:/my keys/id\"\n");
+            assert_eq!(hosts[0].identity_file.as_deref(), Some("C:/my keys/id"));
+        }
+
+        #[test]
+        fn rejects_newline_injection() {
+            let input = SshHostInput {
+                patterns: "x".into(),
+                host_name: Some("a\nProxyCommand evil".into()),
+                user: None,
+                port: None,
+                identity_file: None,
+                proxy_jump: None,
+            };
+            assert!(managed_values(&input).is_err());
+        }
     }
 }
 

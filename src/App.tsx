@@ -30,6 +30,7 @@ import { DnsPage } from "@/features/dns/dns-page";
 import { DnsCachePage } from "@/features/dns-cache/dns-cache-page";
 import { DnsMonitorPage } from "@/features/dns-monitor/dns-monitor-page";
 import { HostsPage } from "@/features/hosts/hosts-page";
+import { SshPage } from "@/features/ssh/ssh-page";
 import { NrptRulesPage } from "@/features/nrpt/nrpt-rules-page";
 import { ProxyPage } from "@/features/proxy/proxy-page";
 import { RoutingPage } from "@/features/routing/routing-page";
@@ -110,6 +111,7 @@ function App() {
             {active === "dns-cache" && <DnsCachePage />}
             {active === "dns-monitor" && <DnsMonitorPage />}
             {active === "hosts-file" && <HostsPage />}
+            {active === "ssh-config" && <SshPage />}
             {active === "proxy-settings" && <ProxyPage />}
             {active === "code-signing" && <CodeSigningPage />}
             {active === "certificate-store" && <CertificatesPage />}

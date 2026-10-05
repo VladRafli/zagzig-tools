@@ -9,6 +9,7 @@ import {
   Radar,
   Route,
   Server,
+  Terminal,
   Timer,
   Waypoints,
 } from "lucide-react";
@@ -33,6 +34,7 @@ export type NavId =
   | "dns-cache"
   | "dns-monitor"
   | "hosts-file"
+  | "ssh-config"
   | "proxy-settings"
   | "code-signing"
   | "certificate-store";
@@ -54,6 +56,7 @@ export const navGroups: NavGroup[] = [
       { id: "dns-cache", labelKey: "nav.dnsCache", icon: Database },
       { id: "dns-monitor", labelKey: "nav.dnsMonitor", icon: Timer },
       { id: "hosts-file", labelKey: "nav.hostsFile", icon: FileCog },
+      { id: "ssh-config", labelKey: "nav.sshConfig", icon: Terminal },
       { id: "proxy-settings", labelKey: "nav.proxySettings", icon: Waypoints },
     ],
   },

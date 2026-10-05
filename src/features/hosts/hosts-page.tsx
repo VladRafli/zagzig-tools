@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, type DragEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Loader2, Lock, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { GripVertical, Loader2, Lock, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { toast } from "sonner";
@@ -121,11 +121,21 @@ function EntryRow({
   t,
   isAdministrator,
   onChanged,
+  dropIndicator,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd,
 }: {
   entry: HostsEntry;
   t: TFunction;
   isAdministrator: boolean;
   onChanged: () => void;
+  dropIndicator: "above" | "below" | null;
+  onDragStart: () => void;
+  onDragOver: (e: DragEvent<HTMLDivElement>) => void;
+  onDrop: () => void;
+  onDragEnd: () => void;
 }) {
   const [toggling, setToggling] = useState(false);
 
@@ -149,7 +159,31 @@ function EntryRow({
   }
 
   return (
-    <div className="grid grid-cols-[2.5rem_9rem_1fr_10rem_2.5rem] items-center gap-2 border-b px-3 py-2 text-sm last:border-b-0">
+    <div
+      draggable={isAdministrator}
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDrop={(e) => {
+        e.preventDefault();
+        onDrop();
+      }}
+      onDragEnd={onDragEnd}
+      className={`grid grid-cols-[1rem_2.5rem_9rem_1fr_10rem_2.5rem] items-center gap-2 border-b px-3 py-2 text-sm last:border-b-0 ${
+        dropIndicator === "above"
+          ? "shadow-[inset_0_2px_0_0_var(--color-primary)]"
+          : dropIndicator === "below"
+            ? "shadow-[inset_0_-2px_0_0_var(--color-primary)]"
+            : ""
+      }`}
+    >
+      <GripVertical
+        className={`size-4 ${
+          isAdministrator
+            ? "cursor-grab text-muted-foreground"
+            : "text-muted-foreground/30"
+        }`}
+        aria-label={t("hosts.dragToReorder")}
+      />
       <AdminRequiredTooltip locked={!isAdministrator}>
         <Switch
           checked={entry.enabled}
@@ -191,10 +225,38 @@ function EntryTable({
   isAdministrator: boolean;
   onChanged: () => void;
 }) {
+  const [dragLine, setDragLine] = useState<number | null>(null);
+  const [overLine, setOverLine] = useState<number | null>(null);
+
+  function endDrag() {
+    setDragLine(null);
+    setOverLine(null);
+  }
+
+  async function dropOn(targetLine: number) {
+    const from = dragLine;
+    endDrag();
+    if (from === null || from === targetLine) return;
+    try {
+      await invoke("move_hosts_entry", {
+        lineNumber: from,
+        targetLineNumber: targetLine,
+      });
+      onChanged();
+    } catch (err) {
+      toast.error(
+        t("hosts.moveError", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    }
+  }
+
   return (
     <div className="overflow-x-auto rounded-lg border">
       <div className="min-w-[42rem]">
-        <div className="grid grid-cols-[2.5rem_9rem_1fr_10rem_2.5rem] gap-2 border-b bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground">
+        <div className="grid grid-cols-[1rem_2.5rem_9rem_1fr_10rem_2.5rem] gap-2 border-b bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground">
+          <span />
           <span>{t("hosts.columns.enabled")}</span>
           <span>{t("hosts.columns.ip")}</span>
           <span>{t("hosts.columns.hostnames")}</span>
@@ -208,6 +270,23 @@ function EntryTable({
             t={t}
             isAdministrator={isAdministrator}
             onChanged={onChanged}
+            dropIndicator={
+              dragLine !== null &&
+              overLine === entry.lineNumber &&
+              dragLine !== entry.lineNumber
+                ? dragLine < entry.lineNumber
+                  ? "below"
+                  : "above"
+                : null
+            }
+            onDragStart={() => setDragLine(entry.lineNumber)}
+            onDragOver={(e) => {
+              if (dragLine === null) return;
+              e.preventDefault();
+              setOverLine(entry.lineNumber);
+            }}
+            onDrop={() => dropOn(entry.lineNumber)}
+            onDragEnd={endDrag}
           />
         ))}
       </div>
