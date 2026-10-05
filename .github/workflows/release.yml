@@ -47,17 +47,16 @@ jobs:
           releaseName: "zagzig-tools ${{ github.ref_name }}"
           # NOTE: this is a static, per-release description — update it
           # before tagging each release (it's plain text, not generated from
-          # commits/changelog). What's below describes v0.3.1 specifically.
+          # commits/changelog). What's below describes v0.4.0 specifically.
           releaseBody: |
-            ## What's new in v0.3.1
+            ## What's new in v0.4.0
 
-            - **Fixed**: NRPT rules and certificates could silently show missing data — NRPT
-              rules with real DNS servers configured showed "—" for Name servers, and
-              certificates with a real Enhanced Key Usage restriction showed "Any purpose" in
-              Certificate Store. Both were a Windows PowerShell serialization issue, now fixed.
-            - Connection Test's traceroute now resolves each hop's hostname (`name [ip]`, the
-              same convention `tracert.exe` uses) instead of showing a bare IP.
-            - Relicensed from AGPL-3.0-or-later to MIT.
+            - **SSH Config** (new page under Network): list, add, edit and remove the `Host`
+              entries in `~/.ssh/config`, with a raw editor for everything else. Edits only
+              touch the options the page manages. No administrator rights needed.
+            - **Hosts File**: drag entries by the grip handle to reorder them.
+            - The theme and language selectors now show their labels instead of raw values.
+            - You can check for updates manually, and the app re-checks hourly in the background.
 
             See the assets below to download this release.
 
