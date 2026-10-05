@@ -72,8 +72,9 @@ and language switcher.
 ### Administrator rights
 
 Some actions need administrator approval — removing an NRPT rule, adding or removing a route,
-changing DNS servers, editing the hosts file, changing the WinHTTP proxy, or deleting a certificate
-from the machine-wide (`Local Machine`) store.
+changing DNS servers, editing or reordering the hosts file, changing the WinHTTP proxy, force
+restarting WSL, or deleting a certificate from the machine-wide (`Local Machine`) store. The SSH
+Config page and the rest of the WSL page don't need administrator rights.
 
 The app itself **never needs to run elevated**. Instead, each privileged action triggers exactly
 one UAC prompt for that specific change — you don't have to relaunch the whole app as
@@ -197,6 +198,74 @@ file" troubleshooting guide, which has no dedicated GUI anywhere in Windows.
 - **Raw editor**: an expandable text editor showing the whole file as-is, for anything the
   structured view doesn't understand. Saving replaces the entire file and requires administrator
   rights.
+- **Reordering**: drag an entry by the grip handle on the left of its row and drop it on another
+  row to move it above (dragging up) or below (dragging down) that row — drop on the first or last
+  row to send an entry to the very top or bottom. Only the dragged line moves; comments and blank
+  lines stay where they were. Requires administrator rights (one UAC prompt per move).
+
+### SSH Config
+
+*Network → SSH Config*
+
+Manages the `Host` entries in `~/.ssh/config` (`C:\Users\<you>\.ssh\config`) — the aliases OpenSSH
+expands before connecting, so `ssh prod` can stand in for a full user, address, port and key. The
+file belongs to your account, so nothing on this page needs administrator rights.
+
+- **List**: one row per `Host` block — alias, `user@hostname` (plus `via <proxy jump>` when set),
+  identity file and port. A "+N other options" note counts options in the block this page doesn't
+  manage (e.g. `ForwardAgent`).
+- **Add / edit**: alias, hostname, user, port, identity file and proxy jump. Editing only touches
+  those keys — every other line and comment in the block is kept, and clearing a field removes
+  that key. Port must be 1–65535, and values can't contain newlines or quotes. An alias that
+  already exists can't be added again.
+- **Remove**: deletes the whole `Host` block, including options the page doesn't show.
+- **Raw editor**: an expandable text editor for the whole file — use it for `Match` blocks,
+  `Include` lines and anything else the list doesn't cover. Saving replaces the entire file.
+
+If the file changes on disk between loading the list and clicking Edit or Remove, the action is
+refused with a "refresh and try again" message rather than touching the wrong lines.
+
+### WSL
+
+*Network → WSL*
+
+Windows Subsystem for Linux: see what's running, stop things, restart WSL, and edit the global
+`.wslconfig`. Everything except the force restart runs without administrator rights.
+
+- **Distributions**: each installed distro with its state (running/stopped), WSL version and a
+  "Default" badge. Per row you can **stop** a distro (`wsl --terminate`) or **set it as default**.
+- **Shut down WSL**: runs `wsl --shutdown` after a confirmation — stops every distro and the WSL
+  virtual machine. WSL starts again the next time you use it, and that's also when a changed
+  `.wslconfig` takes effect. Unsaved work inside running distros is lost.
+- **`.wslconfig` form**: memory limit, processors, swap size, networking mode, auto memory reclaim,
+  localhost forwarding and nested virtualization (the `[wsl2]` section of `%USERPROFILE%\.wslconfig`).
+  Leaving a field on "Default" removes that key from the file; every other line, comment and
+  section is kept. Changes apply after WSL is shut down and started again.
+- **Raw editor**: an expandable text editor for the whole `.wslconfig`, for sections and options
+  the form doesn't cover. Saving replaces the entire file.
+
+#### When WSL is broken: Force restart
+
+If WSL stops answering (for example the Docker Desktop integration is gone and `wsl --shutdown`
+hangs), the page notices — status checks time out instead of freezing the app — and shows
+"WSL isn't responding" with the **Force restart** button highlighted. Force restart:
+
+1. Closes Docker Desktop first, if you leave **Also restart Docker Desktop** ticked.
+2. Stops the WSL service (`WSLService` / `LxssManager`), kills any leftover WSL processes
+   (`wsl`, `wslhost`, `wslrelay`, `wslservice`, `wslg`, `vmmem`, `vmmemWSL`) and starts the service
+   again. This step needs administrator approval (one UAC prompt).
+3. Starts WSL again — the distros that were running before, or the default distro if none could be
+   detected — and then Docker Desktop. These are started **without** elevation, so nothing runs as
+   administrator by accident.
+
+Unsaved work inside running distros is lost, and Windows may refuse to kill `vmmem`; stopping the
+service is what actually tears the VM down. If a distro or Docker Desktop doesn't come back, a
+warning toast says which.
+
+When Docker Desktop is installed in its default location (`Program Files\Docker\Docker`), a
+separate **Restart Docker Desktop** button is also available: it closes Docker Desktop and its
+helper processes, then launches it again — for when WSL is fine but Docker's integration is
+missing or stuck. It needs no administrator rights, and running containers are stopped.
 
 ### Proxy Settings
 

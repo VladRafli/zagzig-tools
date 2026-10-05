@@ -24,7 +24,9 @@ Looking for how to use the app rather than how it's built? See the
 | DNS Servers | Set DNS servers per network adapter — as many as you need, not just preferred/alternate |
 | DNS Cache | View and flush the resolver cache — what `ipconfig /displaydns`/`/flushdns` do, no GUI |
 | DNS Monitor | Background, continuous resolution checks against chosen DNS servers, with a running log |
-| Hosts File | Edit `C:\Windows\System32\drivers\etc\hosts`, structured or raw — no built-in GUI exists for this |
+| Hosts File | Edit `C:\Windows\System32\drivers\etc\hosts`, structured or raw, and drag entries to reorder them — no built-in GUI exists for this |
+| SSH Config | Add, edit and remove `Host` entries in `~/.ssh/config`, structured or raw — no admin rights needed |
+| WSL | Stop distros, shut down or force-restart a hung WSL (and Docker Desktop), and edit `.wslconfig` |
 | Proxy Settings | The WinHTTP proxy (`netsh winhttp`) — the machine-wide proxy Windows Update and many background services and CLI tools honor, separate from the one in Settings > Network |
 | Code Signing | Sign and verify files with Authenticode via `signtool.exe`, auto-located from the Windows SDK |
 | Certificate Store | Browse, view details of, export, or delete certificates without `certmgr.msc` |
