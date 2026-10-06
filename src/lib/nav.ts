@@ -18,6 +18,7 @@ import {
   Waypoints,
   BookOpen,
   Boxes,
+  Variable,
   Languages,
   Cog,
   ScrollText,
@@ -61,6 +62,7 @@ export type NavId =
   | "wifi"
   | "services"
   | "event-log"
+  | "environment"
   | "proxy-settings"
   | "code-signing"
   | "certificate-store";
@@ -102,6 +104,7 @@ export const navGroups: NavGroup[] = [
     items: [
       { id: "services", labelKey: "nav.services", icon: Cog },
       { id: "event-log", labelKey: "nav.eventLog", icon: ScrollText },
+      { id: "environment", labelKey: "nav.environment", icon: Variable },
     ],
   },
   {

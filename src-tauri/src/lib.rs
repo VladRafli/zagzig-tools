@@ -70,6 +70,12 @@ pub fn run() {
             languages::remove_language_pack,
             languages::save_language_template,
             languages::reveal_languages_folder,
+            envvars::get_env_variables,
+            envvars::set_env_variable,
+            envvars::delete_env_variable,
+            envvars::get_env_history,
+            envvars::undo_env_change,
+            envvars::check_path_entries,
             wsl::get_wsl_status,
             wsl::wsl_terminate_distro,
             wsl::wsl_set_default_distro,
@@ -5269,6 +5275,521 @@ mod languages {
         fn reads_rtl() {
             let pack = parse_pack(r#"{"$meta":{"code":"ar","name":"العربية","dir":"rtl"},"a":"b"}"#).unwrap();
             assert_eq!(pack.dir, "rtl");
+        }
+    }
+}
+
+// Backs the "Environment" page: user and system environment variables,
+// including the PATH list. Values are read from and written to the registry
+// directly (`HKCU\Environment`, and the Session Manager key for the machine)
+// because the .NET environment API silently expands `%VAR%` references and
+// drops the plain-vs-expandable type, which would corrupt a value on save.
+// User-scope changes need no elevation; machine-scope changes go through
+// `run_elevated`. Every change records the previous state first, so it can be
+// undone, and ends with a WM_SETTINGCHANGE broadcast so Explorer and newly
+// started programs pick it up.
+mod envvars {
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use serde::{Deserialize, Serialize};
+    use tauri::Manager;
+
+    use crate::{run_elevated, run_powershell, value_or_vec};
+
+    const MAX_NAME_LEN: usize = 255;
+    // Well under the 32,767-character limit of the whole environment block,
+    // and the value also travels through an environment variable / temp file.
+    const MAX_VALUE_LEN: usize = 16_000;
+    const MAX_HISTORY: usize = 50;
+
+    // Machine-scope variables Windows itself relies on; deleting any of them
+    // can leave the PC unable to start programs or log in.
+    const PROTECTED_SYSTEM: [&str; 13] = [
+        "path",
+        "pathext",
+        "comspec",
+        "systemroot",
+        "windir",
+        "systemdrive",
+        "os",
+        "temp",
+        "tmp",
+        "psmodulepath",
+        "driverdata",
+        "processor_architecture",
+        "numberof_processors",
+    ];
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct EnvVar {
+        pub name: String,
+        pub value: String,
+        /// "string" or "expand" (REG_EXPAND_SZ — may contain %VAR% references).
+        pub kind: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct EnvSnapshot {
+        #[serde(default, deserialize_with = "value_or_vec")]
+        pub user: Vec<EnvVar>,
+        #[serde(default, deserialize_with = "value_or_vec")]
+        pub system: Vec<EnvVar>,
+    }
+
+    // Registry values only; the unnamed "(Default)" value isn't a variable.
+    const GET_ENV_SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+function Read-EnvKey($hive, $subKey) {
+    $items = @()
+    $key = $hive.OpenSubKey($subKey)
+    if ($key) {
+        foreach ($n in $key.GetValueNames()) {
+            if (-not $n) { continue }
+            $kind = $key.GetValueKind($n)
+            if ($kind -ne 'String' -and $kind -ne 'ExpandString') { continue }
+            $items += [pscustomobject]@{
+                name = [string]$n
+                value = [string]$key.GetValue($n, '', 'DoNotExpandEnvironmentNames')
+                kind = if ($kind -eq 'ExpandString') { 'expand' } else { 'string' }
+            }
+        }
+        $key.Close()
+    }
+    return $items
+}
+$user = Read-EnvKey ([Microsoft.Win32.Registry]::CurrentUser) 'Environment'
+$system = Read-EnvKey ([Microsoft.Win32.Registry]::LocalMachine) 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
+ConvertTo-Json -InputObject ([pscustomobject]@{ user = @($user); system = @($system) }) -Depth 4 -Compress
+"#;
+
+    #[tauri::command]
+    pub async fn get_env_variables() -> Result<EnvSnapshot, String> {
+        let trimmed = run_powershell(GET_ENV_SCRIPT, &[]).await?;
+        let mut snapshot: EnvSnapshot = serde_json::from_str(&trimmed)
+            .map_err(|err| format!("failed to parse powershell output: {err}"))?;
+        for list in [&mut snapshot.user, &mut snapshot.system] {
+            list.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        }
+        Ok(snapshot)
+    }
+
+    // Shared by the unelevated (user scope) and elevated (machine scope)
+    // paths: reads the request from `$req`, remembers the variable's previous
+    // state, applies the change and broadcasts it.
+    const APPLY_CORE: &str = r#"
+$system = ($req.Scope -eq 'system')
+$hive = if ($system) { [Microsoft.Win32.Registry]::LocalMachine } else { [Microsoft.Win32.Registry]::CurrentUser }
+$subKey = if ($system) { 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment' } else { 'Environment' }
+$key = $hive.OpenSubKey($subKey, $true)
+if (-not $key) { throw 'Could not open the environment registry key.' }
+$prev = @{ Exists = $false; Value = ''; Kind = 'string' }
+try {
+    $actual = $null
+    foreach ($n in $key.GetValueNames()) { if ($n -ieq $req.Name) { $actual = $n; break } }
+    if ($actual) {
+        $prev.Exists = $true
+        $prev.Value = [string]$key.GetValue($actual, '', 'DoNotExpandEnvironmentNames')
+        $prev.Kind = if ($key.GetValueKind($actual) -eq 'ExpandString') { 'expand' } else { 'string' }
+    }
+    if ($req.Delete) {
+        if ($actual) { $key.DeleteValue($actual) }
+    } else {
+        $kind = if ($req.Kind -eq 'expand') { [Microsoft.Win32.RegistryValueKind]::ExpandString } else { [Microsoft.Win32.RegistryValueKind]::String }
+        $target = if ($actual) { $actual } else { [string]$req.Name }
+        $key.SetValue($target, [string]$req.Value, $kind)
+    }
+} finally {
+    $key.Close()
+}
+# Tell running programs (Explorer, new shells) the environment changed.
+# Best effort: the change itself has already been saved.
+try {
+    if (-not ('ZagzigNative.EnvBroadcast' -as [type])) {
+        Add-Type -Namespace ZagzigNative -Name EnvBroadcast -MemberDefinition '[DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);'
+    }
+    [UIntPtr]$broadcastResult = [UIntPtr]::Zero
+    [void][ZagzigNative.EnvBroadcast]::SendMessageTimeout([IntPtr]0xffff, 0x001A, [UIntPtr]::Zero, 'Environment', 2, 3000, [ref]$broadcastResult)
+} catch {}
+return @{ Success = $true; Previous = $prev }
+"#;
+
+    fn user_script() -> String {
+        format!(
+            r#"
+$ErrorActionPreference = 'Stop'
+try {{
+    $req = ConvertFrom-Json -InputObject $env:ZAGZIG_ENV_REQUEST
+    $result = & {{ {APPLY_CORE} }}
+    $result | ConvertTo-Json -Depth 4 -Compress
+}} catch {{
+    $ex = $_.Exception
+    while ($ex.InnerException) {{ $ex = $ex.InnerException }}
+    @{{ Success = $false; Error = $ex.Message }} | ConvertTo-Json -Compress
+}}
+"#
+        )
+    }
+
+    fn system_worker() -> String {
+        format!(
+            r#"
+param(
+    [Parameter(Mandatory)] [string]$InputPath,
+    [Parameter(Mandatory)] [string]$OutputPath
+)
+$ErrorActionPreference = 'Stop'
+try {{
+    $req = Get-Content -Raw -LiteralPath $InputPath | ConvertFrom-Json
+    $result = & {{ {APPLY_CORE} }}
+    $result | ConvertTo-Json -Depth 4 -Compress | Set-Content -LiteralPath $OutputPath
+}} catch {{
+    $ex = $_.Exception
+    while ($ex.InnerException) {{ $ex = $ex.InnerException }}
+    @{{ Success = $false; Error = $ex.Message }} | ConvertTo-Json -Compress | Set-Content -LiteralPath $OutputPath
+}}
+"#
+        )
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct EnvPrevious {
+        pub value: String,
+        pub kind: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct PrevRaw {
+        exists: bool,
+        #[serde(default)]
+        value: String,
+        #[serde(default)]
+        kind: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct ApplyReply {
+        success: bool,
+        #[serde(default)]
+        error: Option<String>,
+        #[serde(default)]
+        previous: Option<PrevRaw>,
+    }
+
+    /// One recorded change: what the variable looked like *before* it.
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct EnvChange {
+        pub id: String,
+        /// Seconds since the Unix epoch.
+        pub time: u64,
+        pub scope: String,
+        pub name: String,
+        /// "set", "delete" or "undo".
+        pub action: String,
+        /// `None` means the variable didn't exist before.
+        pub previous: Option<EnvPrevious>,
+    }
+
+    fn valid_scope(scope: &str) -> bool {
+        scope == "user" || scope == "system"
+    }
+
+    fn valid_name(name: &str) -> bool {
+        !name.is_empty()
+            && name.chars().count() <= MAX_NAME_LEN
+            && name == name.trim()
+            && !name.contains('=')
+            && !name.chars().any(char::is_control)
+    }
+
+    fn valid_value(value: &str) -> bool {
+        value.chars().count() <= MAX_VALUE_LEN && !value.chars().any(char::is_control)
+    }
+
+    fn is_protected(scope: &str, name: &str) -> bool {
+        scope == "system" && PROTECTED_SYSTEM.contains(&name.to_ascii_lowercase().as_str())
+    }
+
+    fn history_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+        let dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|err| format!("couldn't find the app data folder: {err}"))?;
+        std::fs::create_dir_all(&dir).map_err(|err| format!("couldn't create the app data folder: {err}"))?;
+        Ok(dir.join("env-history.json"))
+    }
+
+    fn read_history(path: &PathBuf) -> Vec<EnvChange> {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default()
+    }
+
+    // Newest first, capped.
+    fn push_history(mut history: Vec<EnvChange>, entry: EnvChange) -> Vec<EnvChange> {
+        history.insert(0, entry);
+        history.truncate(MAX_HISTORY);
+        history
+    }
+
+    fn now_secs() -> u64 {
+        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    }
+
+    // Applies one change and records it. `new` is `None` to delete.
+    async fn apply(
+        app: &tauri::AppHandle,
+        scope: &str,
+        name: &str,
+        new: Option<(&str, &str)>,
+        action: &str,
+    ) -> Result<(), String> {
+        let (value, kind) = new.unwrap_or(("", "string"));
+        let request = serde_json::json!({
+            "Scope": scope,
+            "Name": name,
+            "Delete": new.is_none(),
+            "Value": value,
+            "Kind": kind,
+        })
+        .to_string();
+
+        let raw = if scope == "system" {
+            run_elevated(&system_worker(), &request).await?
+        } else {
+            run_powershell(&user_script(), &[("ZAGZIG_ENV_REQUEST", request.as_str())]).await?
+        };
+        let reply: ApplyReply = serde_json::from_str(raw.trim())
+            .map_err(|err| format!("failed to parse powershell output: {err}"))?;
+        if !reply.success {
+            return Err(reply.error.unwrap_or_else(|| "Unknown error.".to_string()));
+        }
+
+        let previous = reply.previous.filter(|p| p.exists).map(|p| EnvPrevious {
+            value: p.value,
+            kind: if p.kind == "expand" { "expand".to_string() } else { "string".to_string() },
+        });
+        // Nothing changed (same value, or deleting something that wasn't there)
+        // isn't worth a history entry.
+        let unchanged = match (&previous, new) {
+            (Some(p), Some((v, k))) => p.value == v && p.kind == k,
+            (None, None) => true,
+            _ => false,
+        };
+        if !unchanged {
+            let entry = EnvChange {
+                id: format!("{}-{}", now_secs(), SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0)),
+                time: now_secs(),
+                scope: scope.to_string(),
+                name: name.to_string(),
+                action: action.to_string(),
+                previous,
+            };
+            // The change is already applied; failing to log it must not make
+            // the command look like it failed.
+            if let Ok(path) = history_path(app) {
+                let history = push_history(read_history(&path), entry);
+                if let Ok(json) = serde_json::to_string_pretty(&history) {
+                    let _ = std::fs::write(path, json);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[tauri::command]
+    pub async fn set_env_variable(
+        app: tauri::AppHandle,
+        scope: String,
+        name: String,
+        value: String,
+        kind: String,
+    ) -> Result<(), String> {
+        if !valid_scope(&scope) {
+            return Err("Unknown scope.".to_string());
+        }
+        if !valid_name(&name) {
+            return Err("Enter a valid variable name (no '=' and no leading or trailing spaces).".to_string());
+        }
+        if !valid_value(&value) {
+            return Err(format!("The value is too long or contains control characters (limit {MAX_VALUE_LEN} characters)."));
+        }
+        let kind = if kind == "expand" { "expand" } else { "string" };
+        apply(&app, &scope, &name, Some((&value, kind)), "set").await
+    }
+
+    #[tauri::command]
+    pub async fn delete_env_variable(app: tauri::AppHandle, scope: String, name: String) -> Result<(), String> {
+        if !valid_scope(&scope) || !valid_name(&name) {
+            return Err("That doesn't look like a valid variable.".to_string());
+        }
+        if is_protected(&scope, &name) {
+            return Err(format!("{name} is needed by Windows and can't be deleted here."));
+        }
+        apply(&app, &scope, &name, None, "delete").await
+    }
+
+    #[tauri::command]
+    pub async fn get_env_history(app: tauri::AppHandle) -> Result<Vec<EnvChange>, String> {
+        let path = history_path(&app)?;
+        tauri::async_runtime::spawn_blocking(move || read_history(&path))
+            .await
+            .map_err(|err| format!("history task failed to run: {err}"))
+    }
+
+    // Puts a variable back to how it was before the recorded change. That is
+    // itself a change, so it's recorded too (and can be undone in turn).
+    #[tauri::command]
+    pub async fn undo_env_change(app: tauri::AppHandle, id: String) -> Result<(), String> {
+        let path = history_path(&app)?;
+        let entry = read_history(&path)
+            .into_iter()
+            .find(|e| e.id == id)
+            .ok_or_else(|| "That change is no longer in the history.".to_string())?;
+        if !valid_scope(&entry.scope) || !valid_name(&entry.name) {
+            return Err("That history entry isn't valid.".to_string());
+        }
+        match &entry.previous {
+            Some(p) => {
+                if !valid_value(&p.value) {
+                    return Err("The saved value isn't valid.".to_string());
+                }
+                apply(&app, &entry.scope, &entry.name, Some((&p.value, &p.kind)), "undo").await
+            }
+            None => {
+                if is_protected(&entry.scope, &entry.name) {
+                    return Err(format!("{} is needed by Windows and can't be deleted here.", entry.name));
+                }
+                apply(&app, &entry.scope, &entry.name, None, "undo").await
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct PathCheck {
+        pub expanded: String,
+        /// `None` when it couldn't be checked cheaply (network paths) or
+        /// the entry is empty.
+        pub exists: Option<bool>,
+    }
+
+    // Replaces %NAME% with this process's value of NAME, the way Windows
+    // expands a REG_EXPAND_SZ; unknown names are left as written.
+    fn expand_env(text: &str) -> String {
+        let mut out = String::new();
+        let mut rest = text;
+        while let Some(start) = rest.find('%') {
+            out.push_str(&rest[..start]);
+            let after = &rest[start + 1..];
+            match after.find('%') {
+                Some(end) if end > 0 => {
+                    let name = &after[..end];
+                    match std::env::var(name) {
+                        Ok(value) => out.push_str(&value),
+                        Err(_) => {
+                            out.push('%');
+                            out.push_str(name);
+                            out.push('%');
+                        }
+                    }
+                    rest = &after[end + 1..];
+                }
+                _ => {
+                    out.push('%');
+                    rest = after;
+                }
+            }
+        }
+        out.push_str(rest);
+        out
+    }
+
+    #[tauri::command]
+    pub async fn check_path_entries(entries: Vec<String>) -> Result<Vec<PathCheck>, String> {
+        tauri::async_runtime::spawn_blocking(move || {
+            entries
+                .into_iter()
+                .map(|entry| {
+                    let expanded = expand_env(entry.trim());
+                    // Network paths can stall for a long time when the server
+                    // is unreachable, so they're not probed.
+                    let exists = if expanded.is_empty() || expanded.starts_with("\\\\") {
+                        None
+                    } else {
+                        Some(std::path::Path::new(&expanded).is_dir())
+                    };
+                    PathCheck { expanded, exists }
+                })
+                .collect()
+        })
+        .await
+        .map_err(|err| format!("path check task failed to run: {err}"))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn validates_names_and_values() {
+            assert!(valid_name("JAVA_HOME") && valid_name("My Var") && valid_name("ProgramFiles(x86)"));
+            assert!(!valid_name("") && !valid_name("A=B") && !valid_name(" lead") && !valid_name("x\ny"));
+            assert!(valid_value("C:\\a;C:\\b") && !valid_value("a\nb") && !valid_value(&"x".repeat(MAX_VALUE_LEN + 1)));
+        }
+
+        #[test]
+        fn protects_core_system_variables_only_in_system_scope() {
+            assert!(is_protected("system", "Path") && is_protected("system", "COMSPEC"));
+            assert!(!is_protected("user", "Path") && !is_protected("system", "JAVA_HOME"));
+        }
+
+        #[test]
+        fn expands_known_variables_and_keeps_unknown_ones() {
+            std::env::set_var("ZAGZIG_TEST_DIR", "C:\\Tools");
+            assert_eq!(expand_env("%ZAGZIG_TEST_DIR%\\bin"), "C:\\Tools\\bin");
+            assert_eq!(expand_env("%ZAGZIG_NOPE_XYZ%\\bin"), "%ZAGZIG_NOPE_XYZ%\\bin");
+            assert_eq!(expand_env("100%"), "100%");
+            assert_eq!(expand_env("a%%b"), "a%%b");
+        }
+
+        #[test]
+        fn history_is_newest_first_and_capped() {
+            let mk = |i: usize| EnvChange {
+                id: i.to_string(),
+                time: i as u64,
+                scope: "user".into(),
+                name: "X".into(),
+                action: "set".into(),
+                previous: None,
+            };
+            let mut h = Vec::new();
+            for i in 0..(MAX_HISTORY + 5) {
+                h = push_history(h, mk(i));
+            }
+            assert_eq!(h.len(), MAX_HISTORY);
+            assert_eq!(h[0].id, (MAX_HISTORY + 4).to_string());
+        }
+
+        #[test]
+        fn parses_replies() {
+            let r: ApplyReply = serde_json::from_str(r#"{"Success":true,"Previous":{"Exists":true,"Value":"a","Kind":"expand"}}"#).unwrap();
+            assert!(r.success && r.previous.unwrap().kind == "expand");
+            let e: ApplyReply = serde_json::from_str(r#"{"Success":false,"Error":"nope"}"#).unwrap();
+            assert!(!e.success && e.error.as_deref() == Some("nope"));
+        }
+
+        #[test]
+        fn scripts_embed_the_core() {
+            assert!(user_script().contains("DoNotExpandEnvironmentNames") && user_script().contains("ZAGZIG_ENV_REQUEST"));
+            assert!(system_worker().contains("InputPath") && system_worker().contains("SendMessageTimeout"));
         }
     }
 }

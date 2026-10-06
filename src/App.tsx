@@ -43,6 +43,7 @@ import { WifiPage } from "@/features/wifi/wifi-page";
 import { ServicesPage } from "@/features/services/services-page";
 import { EventLogPage } from "@/features/event-log/event-log-page";
 import { LanguagesPage } from "@/features/languages/languages-page";
+import { EnvironmentPage } from "@/features/environment/environment-page";
 
 // The manual pulls in a Markdown renderer, so it loads only when opened.
 const ManualPage = lazy(() =>
@@ -139,6 +140,7 @@ function App() {
             {active === "wifi" && <WifiPage />}
             {active === "services" && <ServicesPage />}
             {active === "event-log" && <EventLogPage />}
+            {active === "environment" && <EnvironmentPage />}
             {active === "network-routes" && <RoutingPage />}
             {active === "dns-servers" && <DnsPage />}
             {active === "dns-cache" && <DnsCachePage />}

@@ -38,6 +38,7 @@ Looking for how to use the app rather than how it's built? See the
 | VPN | See and connect/disconnect the VPN connections built into Windows |
 | Wi-Fi | Saved wireless networks and their security; show a saved password after administrator approval |
 | Services | List Windows services; start, stop, restart and change their startup type |
+| Environment Variables | Edit user and system environment variables, with a list editor for PATH (missing/duplicate folders flagged) and undo for every change |
 | Event Log | Recent System/Application events filtered to network & DNS problems and WSL/Hyper-V/Docker |
 | Proxy Settings | The WinHTTP proxy (`netsh winhttp`) — the machine-wide proxy Windows Update and many background services and CLI tools honor, separate from the one in Settings > Network |
 | Code Signing | Sign and verify files with Authenticode via `signtool.exe`, auto-located from the Windows SDK |

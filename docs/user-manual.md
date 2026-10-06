@@ -79,12 +79,13 @@ Some actions need administrator approval — removing an NRPT rule, adding or re
 changing DNS servers, editing or reordering the hosts file, changing the WinHTTP proxy, adding or
 removing a port proxy rule, enabling, disabling or renewing a network adapter, stopping a Windows
 service, turning a firewall rule on or off, clearing ARP/neighbor entries, starting, stopping or
-reconfiguring a service, showing a saved Wi-Fi password, force restarting WSL, or deleting a
-certificate from the machine-wide (`Local Machine`) store. Reading any of these pages — and the
-Ports, Port Proxy, Network Adapters, DNS Lookup, Firewall, Neighbors, VPN, Wi-Fi (profile list),
-Services and Event Log pages — plus the SSH Config page and the rest of the WSL page, don't need
-administrator rights. Connecting or disconnecting a VPN doesn't either, and stopping a process
-only asks for approval if Windows refuses to let you stop it as yourself.
+reconfiguring a service, showing a saved Wi-Fi password, changing a System environment variable,
+force restarting WSL, or deleting a certificate from the machine-wide (`Local Machine`) store.
+Reading any of these pages — and the Ports, Port Proxy, Network Adapters, DNS Lookup, Firewall,
+Neighbors, VPN, Wi-Fi (profile list), Services, Event Log and Environment Variables pages — plus
+the SSH Config page and the rest of the WSL page, don't need administrator rights. Connecting or
+disconnecting a VPN and editing your own (User) environment variables don't either, and stopping a
+process only asks for approval if Windows refuses to let you stop it as yourself.
 
 The app itself **never needs to run elevated**. Instead, each privileged action triggers exactly
 one UAC prompt for that specific change — you don't have to relaunch the whole app as
@@ -507,6 +508,44 @@ administrator rights (the Security log, which does, isn't offered).
   search looks through up to the 2,000 most recent matching events per source.
 - Click an event to see its full message, log and ID. Changing the source, level, window or limit
   reloads the list; use the refresh button to reload on demand.
+
+### Environment Variables
+
+*System → Environment Variables*
+
+The variables Windows hands to every program, including `PATH` — an alternative to the "Edit the
+system environment variables" dialog, with a proper list editor and an undo for every change.
+Reading both scopes needs no administrator rights; **editing your own (User) variables doesn't
+either**, while **System** variables apply to everyone on the PC and need administrator approval
+(one UAC prompt per change).
+
+- **Two scopes**: switch between **User variables** and **System variables** at the top. Search
+  matches names and values. A variable stored as *Expandable* (a `%VARIABLE%`-style value that
+  Windows resolves when it's used) is marked as such.
+- **Add, edit, delete**: a variable's name can't be changed once it exists (add a new one and delete
+  the old one instead). Adding a name that already exists is refused rather than overwriting it.
+  When a value contains `%SOMETHING%` references the **Expandable value** box switches on by
+  itself — otherwise the reference would be stored literally and never resolved. Values are read
+  and saved exactly as stored: unlike many tools, `%SystemRoot%` stays `%SystemRoot%` instead of
+  being replaced by `C:\Windows`.
+- **Edit as list**: for `PATH`-style variables (and any value containing `;`), each entry gets its
+  own row. Move entries up and down, remove or edit them, and add new ones. For variables that hold
+  folders, each row says whether the folder exists (`%VARIABLE%` references are expanded for the
+  check; network paths aren't probed) and flags duplicates. **Remove duplicates** and **Remove
+  missing folders** clean up in one click — nothing is saved until you press **Save**. A length
+  counter warns past 2,047 characters, beyond which some older programs ignore the rest. Values are
+  limited to 16,000 characters.
+- **Protected variables**: Windows needs a handful of system variables (`Path`, `PATHEXT`,
+  `ComSpec`, `SystemRoot`, `windir`, `TEMP`, `TMP`, and a few more) to run, so those can be edited
+  but not deleted.
+- **Change history**: every change made here is recorded together with the value it replaced.
+  **Undo** puts the variable back (or removes it, if it didn't exist before) and is itself
+  recorded, so an undo can be undone. The last 50 changes are kept in the app's data folder —
+  which means a variable's old value, including anything sensitive in it, is stored there.
+
+Changes are written to the registry and Windows is told the environment changed, so File Explorer
+and any program you start afterwards see them. **Programs that were already running — open
+terminals, editors, IDEs — keep their old environment** until you restart them.
 
 ### Code Signing
 
