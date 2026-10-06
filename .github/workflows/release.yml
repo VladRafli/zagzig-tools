@@ -47,25 +47,14 @@ jobs:
           releaseName: "zagzig-tools ${{ github.ref_name }}"
           # NOTE: this is a static, per-release description — update it
           # before tagging each release (it's plain text, not generated from
-          # commits/changelog). What's below describes v0.8.0 specifically.
+          # commits/changelog). What's below describes v0.8.1 specifically.
           releaseBody: |
-            ## What's new in v0.8.0
+            ## What's new in v0.8.1
 
-            - **Firewall** (new page under Network): list every Windows Defender Firewall rule —
-              direction, action, protocol, port, program — search and filter them, and turn a
-              rule on or off (administrator approval). Handy for "why is this port blocked?"
-            - **Neighbors (ARP)**: view the IPv4 ARP / IPv6 neighbor cache and remove entries or
-              clear it (administrator approval).
-            - **VPN**: see the VPN connections built into Windows and connect or disconnect them.
-            - **Wi-Fi**: saved wireless networks and their security settings. A saved password can
-              be shown after a confirmation and administrator approval; it is never stored or
-              logged.
-            - **Services** (new System group): list Windows services, start, stop and restart
-              them, and change their startup type — including delayed automatic start
-              (administrator approval).
-            - **Event Log** (System group): recent events filtered to network and DNS problems or
-              to WSL, Hyper-V and Docker, plus the plain System and Application logs.
-            - The user manual and README cover all of the above.
+            - **Fixed**: dragging entries to reorder them in Hosts File showed a "not allowed"
+              cursor and couldn't be dropped. Windows' native drag-and-drop handling was
+              swallowing the drag inside the app window; it's now turned off (the app doesn't
+              use file drops) and the drag is set up explicitly.
 
             See the assets below to download this release.
 
