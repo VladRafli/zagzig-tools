@@ -42,6 +42,7 @@ pub fn run() {
             ssh::update_ssh_host,
             ssh::remove_ssh_host,
             ssh::set_ssh_config_raw,
+            ports::get_port_usage,
             wsl::get_wsl_status,
             wsl::wsl_terminate_distro,
             wsl::wsl_set_default_distro,
@@ -3183,6 +3184,173 @@ try {
             assert!(validate(&ok).is_ok());
             let bad = WslSettings { memory: Some("8GB\nkernel=x".into()), ..Default::default() };
             assert!(validate(&bad).is_err());
+        }
+    }
+}
+
+// Backs the "Ports" feature: which process owns which TCP connection / UDP
+// endpoint — what `netstat -ano` plus a trip to Task Manager's Details tab
+// would tell you, joined into one view. Read-only and unelevated; a process
+// owned by another user or the system just comes back without an executable
+// path or command line (Windows won't show those to a standard user).
+mod ports {
+    use serde::{Deserialize, Serialize};
+
+    use crate::{run_powershell, string_or_vec, value_or_vec};
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct PortEntry {
+        pub protocol: String,
+        pub local_address: String,
+        pub local_port: u16,
+        pub remote_address: String,
+        pub remote_port: u16,
+        pub state: String,
+        pub pid: u32,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct PortProcess {
+        pub pid: u32,
+        pub name: String,
+        pub path: Option<String>,
+        pub command_line: Option<String>,
+        pub parent_pid: Option<u32>,
+        pub parent_name: Option<String>,
+        pub start_time: Option<String>,
+        pub company: Option<String>,
+        pub description: Option<String>,
+        pub version: Option<String>,
+        pub working_set_mb: Option<f64>,
+        #[serde(default, deserialize_with = "string_or_vec")]
+        pub services: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct PortsSnapshot {
+        #[serde(default, deserialize_with = "value_or_vec")]
+        pub entries: Vec<PortEntry>,
+        #[serde(default, deserialize_with = "value_or_vec")]
+        pub processes: Vec<PortProcess>,
+    }
+
+    // Windows PowerShell 5.1 serializes DateTime as "\/Date(...)\/", so
+    // start times are emitted as ISO-8601 strings instead. Keys are
+    // camelCase here so the same structs serve both directions.
+    const GET_PORTS_SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+
+$entries = New-Object System.Collections.Generic.List[object]
+foreach ($c in @(Get-NetTCPConnection)) {
+    $entries.Add([pscustomobject]@{
+        protocol = 'TCP'
+        localAddress = [string]$c.LocalAddress
+        localPort = [int]$c.LocalPort
+        remoteAddress = [string]$c.RemoteAddress
+        remotePort = [int]$c.RemotePort
+        state = $c.State.ToString()
+        pid = [int]$c.OwningProcess
+    })
+}
+foreach ($u in @(Get-NetUDPEndpoint)) {
+    $entries.Add([pscustomobject]@{
+        protocol = 'UDP'
+        localAddress = [string]$u.LocalAddress
+        localPort = [int]$u.LocalPort
+        remoteAddress = ''
+        remotePort = 0
+        state = ''
+        pid = [int]$u.OwningProcess
+    })
+}
+
+$cim = @{}
+foreach ($p in @(Get-CimInstance Win32_Process)) { $cim[[int]$p.ProcessId] = $p }
+
+$services = @{}
+foreach ($s in @(Get-CimInstance Win32_Service | Where-Object { $_.ProcessId -gt 0 })) {
+    $key = [int]$s.ProcessId
+    if (-not $services.ContainsKey($key)) { $services[$key] = New-Object System.Collections.Generic.List[string] }
+    $services[$key].Add([string]$s.Name)
+}
+
+$versionCache = @{}
+$procs = New-Object System.Collections.Generic.List[object]
+foreach ($procId in @($entries | ForEach-Object { $_.pid } | Sort-Object -Unique)) {
+    $p = $cim[$procId]
+    $name = if ($p) { [string]$p.Name } elseif ($procId -eq 0) { 'System Idle Process' } else { "PID $procId" }
+    $path = if ($p -and $p.ExecutablePath) { [string]$p.ExecutablePath } else { $null }
+
+    $company = $null; $description = $null; $version = $null
+    if ($path) {
+        if (-not $versionCache.ContainsKey($path)) {
+            try { $versionCache[$path] = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($path) } catch { $versionCache[$path] = $null }
+        }
+        $vi = $versionCache[$path]
+        if ($vi) {
+            if ($vi.CompanyName) { $company = [string]$vi.CompanyName }
+            if ($vi.FileDescription) { $description = [string]$vi.FileDescription }
+            if ($vi.FileVersion) { $version = [string]$vi.FileVersion }
+        }
+    }
+
+    $parentPid = $null; $parentName = $null
+    if ($p -and $p.ParentProcessId) {
+        $parentPid = [int]$p.ParentProcessId
+        if ($cim.ContainsKey($parentPid)) { $parentName = [string]$cim[$parentPid].Name }
+    }
+
+    $procs.Add([pscustomobject]@{
+        pid = $procId
+        name = $name
+        path = $path
+        commandLine = if ($p -and $p.CommandLine) { [string]$p.CommandLine } else { $null }
+        parentPid = $parentPid
+        parentName = $parentName
+        startTime = if ($p -and $p.CreationDate) { $p.CreationDate.ToString('o') } else { $null }
+        company = $company
+        description = $description
+        version = $version
+        workingSetMb = if ($p -and $p.WorkingSetSize) { [math]::Round($p.WorkingSetSize / 1MB, 1) } else { $null }
+        services = if ($services.ContainsKey($procId)) { $services[$procId].ToArray() } else { @() }
+    })
+}
+
+[pscustomobject]@{ entries = $entries.ToArray(); processes = $procs.ToArray() } | ConvertTo-Json -Depth 4 -Compress
+"#;
+
+    #[tauri::command]
+    pub async fn get_port_usage() -> Result<PortsSnapshot, String> {
+        let trimmed = run_powershell(GET_PORTS_SCRIPT, &[]).await?;
+        if trimmed.is_empty() {
+            return Ok(PortsSnapshot {
+                entries: Vec::new(),
+                processes: Vec::new(),
+            });
+        }
+        serde_json::from_str(&trimmed).map_err(|err| format!("failed to parse powershell output: {err}"))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn parses_snapshot_with_collapsed_arrays() {
+            // A single entry / single service comes back un-arrayed.
+            let json = r#"{"entries":{"protocol":"TCP","localAddress":"0.0.0.0","localPort":80,"remoteAddress":"0.0.0.0","remotePort":0,"state":"Listen","pid":4},"processes":[{"pid":4,"name":"System","path":null,"commandLine":null,"parentPid":0,"parentName":null,"startTime":null,"company":null,"description":null,"version":null,"workingSetMb":null,"services":"Foo"}]}"#;
+            let snap: PortsSnapshot = serde_json::from_str(json).unwrap();
+            assert_eq!(snap.entries.len(), 1);
+            assert_eq!(snap.processes[0].services, vec!["Foo"]);
+        }
+
+        #[test]
+        fn parses_empty_snapshot() {
+            let snap: PortsSnapshot = serde_json::from_str(r#"{"entries":[],"processes":[]}"#).unwrap();
+            assert!(snap.entries.is_empty() && snap.processes.is_empty());
         }
     }
 }

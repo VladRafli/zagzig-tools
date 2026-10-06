@@ -6,6 +6,7 @@ import {
   FileSignature,
   LayoutDashboard,
   Network,
+  Plug,
   Radar,
   Route,
   Server,
@@ -30,6 +31,7 @@ export type NavId =
   | "dashboard"
   | "nrpt-rules"
   | "connection-test"
+  | "ports"
   | "network-routes"
   | "dns-servers"
   | "dns-cache"
@@ -53,6 +55,7 @@ export const navGroups: NavGroup[] = [
     items: [
       { id: "nrpt-rules", labelKey: "nav.nrptRules", icon: Network },
       { id: "connection-test", labelKey: "nav.connectionTest", icon: Radar },
+      { id: "ports", labelKey: "nav.ports", icon: Plug },
       { id: "network-routes", labelKey: "nav.networkRoutes", icon: Route },
       { id: "dns-servers", labelKey: "nav.dnsServers", icon: Server },
       { id: "dns-cache", labelKey: "nav.dnsCache", icon: Database },

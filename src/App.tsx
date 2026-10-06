@@ -32,6 +32,7 @@ import { DnsMonitorPage } from "@/features/dns-monitor/dns-monitor-page";
 import { HostsPage } from "@/features/hosts/hosts-page";
 import { SshPage } from "@/features/ssh/ssh-page";
 import { WslPage } from "@/features/wsl/wsl-page";
+import { PortsPage } from "@/features/ports/ports-page";
 import { NrptRulesPage } from "@/features/nrpt/nrpt-rules-page";
 import { ProxyPage } from "@/features/proxy/proxy-page";
 import { RoutingPage } from "@/features/routing/routing-page";
@@ -107,6 +108,7 @@ function App() {
             {active === "dashboard" && <DashboardPage onNavigate={setActive} />}
             {active === "nrpt-rules" && <NrptRulesPage />}
             {active === "connection-test" && <ConnectionTestPage />}
+            {active === "ports" && <PortsPage />}
             {active === "network-routes" && <RoutingPage />}
             {active === "dns-servers" && <DnsPage />}
             {active === "dns-cache" && <DnsCachePage />}
