@@ -39,8 +39,8 @@ const en = {
       error: "Couldn't install the update: {{error}}",
       checkForUpdates: "Check for updates",
       checking: "Checking for updates…",
-      upToDate: "You're up to date.",
-      checkError: "Couldn't check for updates.",
+      upToDate: "You're up to date (v{{version}}).",
+      checkError: "Couldn't check for updates: {{error}}",
     },
     titleBar: {
       minimize: "Minimize",

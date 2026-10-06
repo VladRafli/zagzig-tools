@@ -41,8 +41,8 @@ const id: typeof en = {
       error: "Gagal memasang pembaruan: {{error}}",
       checkForUpdates: "Periksa pembaruan",
       checking: "Memeriksa pembaruan…",
-      upToDate: "Aplikasi sudah versi terbaru.",
-      checkError: "Gagal memeriksa pembaruan.",
+      upToDate: "Aplikasi sudah versi terbaru (v{{version}}).",
+      checkError: "Gagal memeriksa pembaruan: {{error}}",
     },
     titleBar: {
       minimize: "Perkecil",

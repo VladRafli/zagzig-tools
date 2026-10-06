@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { Loader2, RefreshCw, SparkleIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -63,10 +64,12 @@ export function UpdateButton() {
     setManualChecking(true);
     try {
       const result = await checkForUpdates();
-      if (result === "idle") {
-        toast.success(t("app.update.upToDate"));
-      } else if (result === "error") {
-        toast.error(t("app.update.checkError"));
+      if (result.status === "idle") {
+        // Naming the running version makes "up to date" checkable at a glance.
+        const version = await getVersion().catch(() => "?");
+        toast.success(t("app.update.upToDate", { version }));
+      } else if (result.status === "error") {
+        toast.error(t("app.update.checkError", { error: result.error }));
       }
     } finally {
       setManualChecking(false);

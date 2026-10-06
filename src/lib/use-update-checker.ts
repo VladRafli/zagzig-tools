@@ -3,6 +3,11 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 
 export type UpdateCheckStatus = "checking" | "idle" | "available" | "error";
 
+export interface UpdateCheckResult {
+  status: UpdateCheckStatus;
+  error: string | null;
+}
+
 // How often to silently re-check in the background. GitHub's latest.json
 // endpoint is a release-asset download (served off their CDN), not a REST
 // API call, so this doesn't burn API rate limit — the interval is purely
@@ -26,7 +31,7 @@ export function useUpdateChecker() {
     statusRef.current = status;
   }, [status]);
 
-  const checkForUpdates = useCallback(async (): Promise<UpdateCheckStatus> => {
+  const checkForUpdates = useCallback(async (): Promise<UpdateCheckResult> => {
     setStatus("checking");
     setError(null);
     try {
@@ -36,11 +41,14 @@ export function useUpdateChecker() {
       setUpdate(result);
       const nextStatus: UpdateCheckStatus = result ? "available" : "idle";
       setStatus(nextStatus);
-      return nextStatus;
+      return { status: nextStatus, error: null };
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      // The updater rejects with a plain string (not an Error) for most
+      // failures, so String() is what actually carries the reason.
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
       setStatus("error");
-      return "error";
+      return { status: "error", error: message };
     }
   }, []);
 
