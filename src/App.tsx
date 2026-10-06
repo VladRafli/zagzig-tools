@@ -33,6 +33,9 @@ import { HostsPage } from "@/features/hosts/hosts-page";
 import { SshPage } from "@/features/ssh/ssh-page";
 import { WslPage } from "@/features/wsl/wsl-page";
 import { PortsPage } from "@/features/ports/ports-page";
+import { PortProxyPage } from "@/features/port-proxy/port-proxy-page";
+import { AdaptersPage } from "@/features/adapters/adapters-page";
+import { DnsLookupPage } from "@/features/dns-lookup/dns-lookup-page";
 import { NrptRulesPage } from "@/features/nrpt/nrpt-rules-page";
 import { ProxyPage } from "@/features/proxy/proxy-page";
 import { RoutingPage } from "@/features/routing/routing-page";
@@ -109,6 +112,9 @@ function App() {
             {active === "nrpt-rules" && <NrptRulesPage />}
             {active === "connection-test" && <ConnectionTestPage />}
             {active === "ports" && <PortsPage />}
+            {active === "port-proxy" && <PortProxyPage />}
+            {active === "network-adapters" && <AdaptersPage />}
+            {active === "dns-lookup" && <DnsLookupPage />}
             {active === "network-routes" && <RoutingPage />}
             {active === "dns-servers" && <DnsPage />}
             {active === "dns-cache" && <DnsCachePage />}

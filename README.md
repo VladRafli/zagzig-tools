@@ -21,8 +21,11 @@ Looking for how to use the app rather than how it's built? See the
 | NRPT Rules | View Name Resolution Policy Table rules — what `Add-DnsClientNrptRule` configures |
 | Connection Test | Ping + traceroute a host in plain language: is it reachable, and what path did it take |
 | Network Routes | View and manage the Windows IP routing table (`route print`/`add`/`delete`, with a GUI) |
-| Ports | See which application uses which TCP/UDP port, with the owning process's path, command line, company, version and hosted services |
+| Ports | See which application uses which TCP/UDP port, with the owning process's details; spot reserved port ranges (Hyper-V/WSL/Docker) and stop the process or service holding a port |
+| Port Proxy | Add, view and remove `netsh interface portproxy` forwarding rules — the usual WSL/Docker workaround, with no built-in GUI |
+| Network Adapters | Each adapter's addresses, gateway, DNS, DHCP, link speed and traffic counters, with enable/disable and DHCP renew |
 | DNS Servers | Set DNS servers per network adapter — as many as you need, not just preferred/alternate |
+| DNS Lookup | A `dig`-style query tool: pick a record type and a specific DNS server to ask |
 | DNS Cache | View and flush the resolver cache — what `ipconfig /displaydns`/`/flushdns` do, no GUI |
 | DNS Monitor | Background, continuous resolution checks against chosen DNS servers, with a running log |
 | Hosts File | Edit `C:\Windows\System32\drivers\etc\hosts`, structured or raw, and drag entries to reorder them — no built-in GUI exists for this |

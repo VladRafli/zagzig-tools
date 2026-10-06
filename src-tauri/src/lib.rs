@@ -43,6 +43,16 @@ pub fn run() {
             ssh::remove_ssh_host,
             ssh::set_ssh_config_raw,
             ports::get_port_usage,
+            portctl::get_excluded_port_ranges,
+            portctl::stop_process,
+            portctl::stop_service,
+            portproxy::get_portproxy_rules,
+            portproxy::add_portproxy_rule,
+            portproxy::remove_portproxy_rule,
+            adapters::get_network_adapters,
+            adapters::set_adapter_enabled,
+            adapters::renew_adapter_dhcp,
+            dnslookup::dns_lookup,
             wsl::get_wsl_status,
             wsl::wsl_terminate_distro,
             wsl::wsl_set_default_distro,
@@ -3351,6 +3361,769 @@ foreach ($procId in @($entries | ForEach-Object { $_.pid } | Sort-Object -Unique
         fn parses_empty_snapshot() {
             let snap: PortsSnapshot = serde_json::from_str(r#"{"entries":[],"processes":[]}"#).unwrap();
             assert!(snap.entries.is_empty() && snap.processes.is_empty());
+        }
+    }
+}
+
+// Backs the "Port Proxy" feature: `netsh interface portproxy` forwards a
+// port on this machine to another address (the usual WSL/Docker workaround)
+// and has no GUI anywhere in Windows. Reading is unelevated; add/remove go
+// through `run_elevated`. `netsh`'s headers are localized, so output is
+// parsed positionally: which of the four rule types a block belongs to comes
+// from the command that was run, and a rule is any row of
+// `<addr> <port> <addr> <port>`.
+mod portproxy {
+    use serde::{Deserialize, Serialize};
+
+    use crate::{run_elevated, run_powershell};
+
+    const KINDS: [&str; 4] = ["v4tov4", "v4tov6", "v6tov4", "v6tov6"];
+
+    #[derive(Debug, Clone, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct PortProxyRule {
+        pub kind: String,
+        pub listen_address: String,
+        pub listen_port: u16,
+        pub connect_address: String,
+        pub connect_port: u16,
+    }
+
+    fn parse_rules(kind: &str, output: &str) -> Vec<PortProxyRule> {
+        output
+            .lines()
+            .filter_map(|line| {
+                let tokens: Vec<&str> = line.split_whitespace().collect();
+                if tokens.len() != 4 {
+                    return None;
+                }
+                Some(PortProxyRule {
+                    kind: kind.to_string(),
+                    listen_address: tokens[0].to_string(),
+                    listen_port: tokens[1].parse().ok()?,
+                    connect_address: tokens[2].to_string(),
+                    connect_port: tokens[3].parse().ok()?,
+                })
+            })
+            .collect()
+    }
+
+    #[tauri::command]
+    pub async fn get_portproxy_rules() -> Result<Vec<PortProxyRule>, String> {
+        let output = run_powershell(
+            "foreach ($k in 'v4tov4','v4tov6','v6tov4','v6tov6') { '### ' + $k; netsh interface portproxy show $k }",
+            &[],
+        )
+        .await?;
+
+        let mut rules = Vec::new();
+        for block in output.split("### ").skip(1) {
+            let (kind, body) = block.split_once('\n').unwrap_or((block, ""));
+            let kind = kind.trim();
+            if KINDS.contains(&kind) {
+                rules.extend(parse_rules(kind, body));
+            }
+        }
+        rules.sort_by(|a, b| (a.listen_port, &a.listen_address).cmp(&(b.listen_port, &b.listen_address)));
+        Ok(rules)
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct ElevatedResult {
+        success: bool,
+        #[serde(default)]
+        error: Option<String>,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct RuleRequest<'a> {
+        #[serde(rename = "Action")]
+        action: &'a str,
+        #[serde(rename = "Kind")]
+        kind: &'a str,
+        #[serde(rename = "ListenAddress")]
+        listen_address: &'a str,
+        #[serde(rename = "ListenPort")]
+        listen_port: u16,
+        #[serde(rename = "ConnectAddress")]
+        connect_address: &'a str,
+        #[serde(rename = "ConnectPort")]
+        connect_port: u16,
+    }
+
+    // Values reach netsh as separate arguments (never spliced into script
+    // text), but they're still restricted to what an address can contain.
+    fn valid_address(value: &str) -> bool {
+        !value.is_empty()
+            && value.len() <= 255
+            && value
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '-' | '_' | '%'))
+    }
+
+    const PORTPROXY_WORKER_SCRIPT: &str = r#"
+param(
+    [Parameter(Mandatory)] [string]$InputPath,
+    [Parameter(Mandatory)] [string]$OutputPath
+)
+$ErrorActionPreference = 'Stop'
+try {
+    $req = Get-Content -Raw -LiteralPath $InputPath | ConvertFrom-Json
+    $netshArgs = @('interface', 'portproxy', $req.Action, $req.Kind, "listenaddress=$($req.ListenAddress)", "listenport=$($req.ListenPort)")
+    if ($req.Action -eq 'add') {
+        $netshArgs += "connectaddress=$($req.ConnectAddress)"
+        $netshArgs += "connectport=$($req.ConnectPort)"
+    }
+    $output = & netsh @netshArgs 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) { throw $output.Trim() }
+    @{ Success = $true } | ConvertTo-Json -Compress | Set-Content -LiteralPath $OutputPath
+} catch {
+    $ex = $_.Exception
+    while ($ex.InnerException) { $ex = $ex.InnerException }
+    @{ Success = $false; Error = $ex.Message } | ConvertTo-Json -Compress | Set-Content -LiteralPath $OutputPath
+}
+"#;
+
+    async fn apply(request: RuleRequest<'_>) -> Result<(), String> {
+        let payload = serde_json::to_string(&request).map_err(|err| format!("failed to build request: {err}"))?;
+        let raw = run_elevated(PORTPROXY_WORKER_SCRIPT, &payload).await?;
+        let parsed: ElevatedResult =
+            serde_json::from_str(&raw).map_err(|err| format!("failed to parse powershell output: {err}"))?;
+        if parsed.success {
+            Ok(())
+        } else {
+            Err(parsed.error.unwrap_or_else(|| "Unknown error.".to_string()))
+        }
+    }
+
+    fn check_kind_and_listen(kind: &str, listen_address: &str, listen_port: u16) -> Result<(), String> {
+        if !KINDS.contains(&kind) {
+            return Err("Unknown rule type.".to_string());
+        }
+        if !valid_address(listen_address) {
+            return Err("Enter a valid listen address (for example 0.0.0.0).".to_string());
+        }
+        if listen_port == 0 {
+            return Err("The listen port must be between 1 and 65535.".to_string());
+        }
+        Ok(())
+    }
+
+    #[tauri::command]
+    pub async fn add_portproxy_rule(
+        kind: String,
+        listen_address: String,
+        listen_port: u16,
+        connect_address: String,
+        connect_port: u16,
+    ) -> Result<(), String> {
+        let (listen_address, connect_address) = (listen_address.trim(), connect_address.trim());
+        check_kind_and_listen(&kind, listen_address, listen_port)?;
+        if !valid_address(connect_address) {
+            return Err("Enter a valid connect address (an IP address or hostname).".to_string());
+        }
+        if connect_port == 0 {
+            return Err("The connect port must be between 1 and 65535.".to_string());
+        }
+        apply(RuleRequest {
+            action: "add",
+            kind: &kind,
+            listen_address,
+            listen_port,
+            connect_address,
+            connect_port,
+        })
+        .await
+    }
+
+    #[tauri::command]
+    pub async fn remove_portproxy_rule(
+        kind: String,
+        listen_address: String,
+        listen_port: u16,
+    ) -> Result<(), String> {
+        let listen_address = listen_address.trim();
+        check_kind_and_listen(&kind, listen_address, listen_port)?;
+        apply(RuleRequest {
+            action: "delete",
+            kind: &kind,
+            listen_address,
+            listen_port,
+            connect_address: "",
+            connect_port: 0,
+        })
+        .await
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn parses_rule_rows_and_skips_headers() {
+            let out = "Listen on ipv4:             Connect to ipv4:\n\nAddress         Port        Address         Port\n--------------- ----------  --------------- ----------\n0.0.0.0         8080        172.20.0.2      80\n127.0.0.1       2222        10.0.0.5        22\n";
+            let rules = parse_rules("v4tov4", out);
+            assert_eq!(rules.len(), 2);
+            assert_eq!(rules[0].listen_port, 8080);
+            assert_eq!(rules[1].connect_address, "10.0.0.5");
+        }
+
+        #[test]
+        fn validates_addresses() {
+            assert!(valid_address("0.0.0.0") && valid_address("fe80::1%12") && valid_address("host-name.local"));
+            assert!(!valid_address("a b") && !valid_address("x\ny") && !valid_address(""));
+        }
+    }
+}
+
+// Backs the extra actions on the "Ports" page: the reserved ("excluded")
+// port ranges that explain a port being unavailable while nothing listens on
+// it, and stopping the process or service that owns a port.
+mod portctl {
+    use serde::{Deserialize, Serialize};
+
+    use crate::{run_elevated, run_powershell};
+
+    #[derive(Debug, Clone, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ExcludedRange {
+        pub start: u16,
+        pub end: u16,
+        pub administered: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ExcludedRanges {
+        pub tcp: Vec<ExcludedRange>,
+        pub udp: Vec<ExcludedRange>,
+    }
+
+    // Rows are `<start> <end> [*]`; every other line (localized titles, the
+    // dashed rule, the legend) fails the numeric parse and is skipped.
+    fn parse_ranges(output: &str) -> Vec<ExcludedRange> {
+        output
+            .lines()
+            .filter_map(|line| {
+                let tokens: Vec<&str> = line.split_whitespace().collect();
+                if tokens.len() < 2 || tokens.len() > 3 {
+                    return None;
+                }
+                let administered = match tokens.get(2) {
+                    None => false,
+                    Some(&"*") => true,
+                    Some(_) => return None,
+                };
+                Some(ExcludedRange {
+                    start: tokens[0].parse().ok()?,
+                    end: tokens[1].parse().ok()?,
+                    administered,
+                })
+            })
+            .collect()
+    }
+
+    #[tauri::command]
+    pub async fn get_excluded_port_ranges() -> Result<ExcludedRanges, String> {
+        let output = run_powershell(
+            "foreach ($p in 'tcp','udp') { '### ' + $p; netsh int ipv4 show excludedportrange protocol=$p }",
+            &[],
+        )
+        .await?;
+
+        let mut ranges = ExcludedRanges {
+            tcp: Vec::new(),
+            udp: Vec::new(),
+        };
+        for block in output.split("### ").skip(1) {
+            let (protocol, body) = block.split_once('\n').unwrap_or((block, ""));
+            match protocol.trim() {
+                "tcp" => ranges.tcp = parse_ranges(body),
+                "udp" => ranges.udp = parse_ranges(body),
+                _ => {}
+            }
+        }
+        Ok(ranges)
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct StopResult {
+        success: bool,
+        #[serde(default)]
+        error: Option<String>,
+    }
+
+    // Processes that must never be stopped from here, whatever the PID.
+    const PROTECTED: [&str; 9] = [
+        "system",
+        "registry",
+        "smss.exe",
+        "csrss.exe",
+        "wininit.exe",
+        "winlogon.exe",
+        "services.exe",
+        "lsass.exe",
+        "memory compression",
+    ];
+
+    // Shared by the unelevated attempt (parameters via env vars) and the
+    // elevated retry (the worker sets the same env vars from its input).
+    // Checking the name too guards against the PID having been reused by a
+    // different process since the list was read.
+    const STOP_PROCESS_CORE: &str = r#"
+$procId = [int]$env:ZAGZIG_PID
+$p = Get-CimInstance Win32_Process -Filter "ProcessId = $procId"
+if (-not $p) { return (@{ Success = $false; Error = 'That process has already exited.' } | ConvertTo-Json -Compress) }
+if ($p.Name -ne $env:ZAGZIG_EXPECTED_NAME) { return (@{ Success = $false; Error = 'That PID now belongs to a different process — refresh and try again.' } | ConvertTo-Json -Compress) }
+try {
+    Stop-Process -Id $procId -Force -ErrorAction Stop
+    return (@{ Success = $true } | ConvertTo-Json -Compress)
+} catch {
+    $ex = $_.Exception
+    while ($ex.InnerException) { $ex = $ex.InnerException }
+    return (@{ Success = $false; Error = $ex.Message } | ConvertTo-Json -Compress)
+}
+"#;
+
+    fn stop_process_worker() -> String {
+        format!(
+            r#"
+param(
+    [Parameter(Mandatory)] [string]$InputPath,
+    [Parameter(Mandatory)] [string]$OutputPath
+)
+$ErrorActionPreference = 'Stop'
+try {{
+    $req = Get-Content -Raw -LiteralPath $InputPath | ConvertFrom-Json
+    $env:ZAGZIG_PID = [string]$req.Pid
+    $env:ZAGZIG_EXPECTED_NAME = [string]$req.Name
+    $result = & {{ {STOP_PROCESS_CORE} }}
+    $result | Set-Content -LiteralPath $OutputPath
+}} catch {{
+    $ex = $_.Exception
+    while ($ex.InnerException) {{ $ex = $ex.InnerException }}
+    @{{ Success = $false; Error = $ex.Message }} | ConvertTo-Json -Compress | Set-Content -LiteralPath $OutputPath
+}}
+"#
+        )
+    }
+
+    fn parse_result(raw: &str) -> Result<StopResult, String> {
+        serde_json::from_str(raw.trim()).map_err(|err| format!("failed to parse powershell output: {err}"))
+    }
+
+    #[tauri::command]
+    pub async fn stop_process(pid: u32, expected_name: String) -> Result<(), String> {
+        if pid == 0 || pid == 4 || pid == std::process::id() {
+            return Err("That process can't be stopped from here.".to_string());
+        }
+        if PROTECTED.contains(&expected_name.to_ascii_lowercase().as_str()) {
+            return Err("That is a critical Windows process and can't be stopped from here.".to_string());
+        }
+
+        let pid_str = pid.to_string();
+        let first = parse_result(
+            &run_powershell(
+                STOP_PROCESS_CORE,
+                &[("ZAGZIG_PID", pid_str.as_str()), ("ZAGZIG_EXPECTED_NAME", expected_name.as_str())],
+            )
+            .await?,
+        )?;
+        if first.success {
+            return Ok(());
+        }
+
+        // "Already exited" and "different process" won't be fixed by more
+        // rights; anything else is most likely access denied, so retry
+        // elevated (one UAC prompt).
+        let message = first.error.unwrap_or_default();
+        if message.starts_with("That ") {
+            return Err(message);
+        }
+        let payload = format!(
+            "{{\"Pid\":{pid},\"Name\":{}}}",
+            serde_json::to_string(&expected_name).map_err(|err| err.to_string())?
+        );
+        let retry = parse_result(&run_elevated(&stop_process_worker(), &payload).await?)?;
+        if retry.success {
+            Ok(())
+        } else {
+            Err(retry.error.unwrap_or(message))
+        }
+    }
+
+    const STOP_SERVICE_WORKER_SCRIPT: &str = r#"
+param(
+    [Parameter(Mandatory)] [string]$InputPath,
+    [Parameter(Mandatory)] [string]$OutputPath
+)
+$ErrorActionPreference = 'Stop'
+try {
+    $req = Get-Content -Raw -LiteralPath $InputPath | ConvertFrom-Json
+    $svc = Get-CimInstance Win32_Service -Filter "Name = '$($req.Name)'"
+    if (-not $svc -or [int]$svc.ProcessId -ne [int]$req.Pid) {
+        throw 'That service is no longer running in that process — refresh and try again.'
+    }
+    Stop-Service -Name $req.Name -Force -ErrorAction Stop
+    @{ Success = $true } | ConvertTo-Json -Compress | Set-Content -LiteralPath $OutputPath
+} catch {
+    $ex = $_.Exception
+    while ($ex.InnerException) { $ex = $ex.InnerException }
+    @{ Success = $false; Error = $ex.Message } | ConvertTo-Json -Compress | Set-Content -LiteralPath $OutputPath
+}
+"#;
+
+    #[tauri::command]
+    pub async fn stop_service(pid: u32, service_name: String) -> Result<(), String> {
+        let name = service_name.trim();
+        if name.is_empty()
+            || name.len() > 256
+            || !name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-' | ' ' | '$'))
+        {
+            return Err("That doesn't look like a valid service name.".to_string());
+        }
+        let payload = format!(
+            "{{\"Pid\":{pid},\"Name\":{}}}",
+            serde_json::to_string(name).map_err(|err| err.to_string())?
+        );
+        let result = parse_result(&run_elevated(STOP_SERVICE_WORKER_SCRIPT, &payload).await?)?;
+        if result.success {
+            Ok(())
+        } else {
+            Err(result.error.unwrap_or_else(|| "Unknown error.".to_string()))
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn parses_excluded_ranges() {
+            let out = "\nProtocol tcp Port Exclusion Ranges\n\nStart Port    End Port      \n----------    --------      \n      5985        5985      \n     50000       50059     *\n\n* - Administered port exclusions.\n";
+            let r = parse_ranges(out);
+            assert_eq!(r.len(), 2);
+            assert!(!r[0].administered && r[0].start == 5985);
+            assert!(r[1].administered && r[1].end == 50059);
+        }
+
+        #[test]
+        fn worker_script_embeds_core() {
+            let script = stop_process_worker();
+            assert!(script.contains("Get-CimInstance Win32_Process") && script.contains("$result = & {"));
+        }
+    }
+}
+
+// Backs the "Network Adapters" page: each adapter's addresses, gateway, DNS,
+// DHCP state, link speed and traffic counters in one place, plus enable /
+// disable and DHCP renew. Reading is unelevated; the actions are elevated.
+mod adapters {
+    use serde::{Deserialize, Serialize};
+
+    use crate::{run_elevated, run_powershell, string_or_vec};
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct NetworkAdapter {
+        pub name: String,
+        pub description: String,
+        pub interface_index: u32,
+        pub status: String,
+        pub mac_address: Option<String>,
+        pub link_speed: Option<String>,
+        pub media_type: Option<String>,
+        pub is_virtual: bool,
+        #[serde(default, deserialize_with = "string_or_vec")]
+        pub ipv4: Vec<String>,
+        #[serde(default, deserialize_with = "string_or_vec")]
+        pub ipv6: Vec<String>,
+        #[serde(default, deserialize_with = "string_or_vec")]
+        pub gateways: Vec<String>,
+        #[serde(default, deserialize_with = "string_or_vec")]
+        pub dns_servers: Vec<String>,
+        pub dhcp: bool,
+        pub mtu: Option<u32>,
+        pub bytes_received: f64,
+        pub bytes_sent: f64,
+    }
+
+    // Arrays are built as plain objects (never a generic List) before
+    // ConvertTo-Json — Windows PowerShell 5.1 fails on the latter.
+    const GET_ADAPTERS_SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+
+$stats = @{}
+foreach ($s in @(Get-NetAdapterStatistics -ErrorAction SilentlyContinue)) { $stats[[int]$s.ifIndex] = $s }
+
+$ipif = @{}
+foreach ($i in @(Get-NetIPInterface -AddressFamily IPv4 -ErrorAction SilentlyContinue)) { $ipif[[int]$i.InterfaceIndex] = $i }
+
+$v4 = @{}; $v6 = @{}
+foreach ($a in @(Get-NetIPAddress -ErrorAction SilentlyContinue)) {
+    $idx = [int]$a.InterfaceIndex
+    $text = "$($a.IPAddress)/$($a.PrefixLength)"
+    if ($a.AddressFamily -eq 'IPv4') {
+        if (-not $v4.ContainsKey($idx)) { $v4[$idx] = @() }
+        $v4[$idx] += $text
+    } else {
+        if (-not $v6.ContainsKey($idx)) { $v6[$idx] = @() }
+        $v6[$idx] += $text
+    }
+}
+
+$gw = @{}
+foreach ($r in @(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue) + @(Get-NetRoute -DestinationPrefix '::/0' -ErrorAction SilentlyContinue)) {
+    if ($r.NextHop -and $r.NextHop -ne '0.0.0.0' -and $r.NextHop -ne '::') {
+        $idx = [int]$r.InterfaceIndex
+        if (-not $gw.ContainsKey($idx)) { $gw[$idx] = @() }
+        $gw[$idx] += [string]$r.NextHop
+    }
+}
+
+$dns = @{}
+foreach ($d in @(Get-DnsClientServerAddress -ErrorAction SilentlyContinue)) {
+    $idx = [int]$d.InterfaceIndex
+    if (-not $dns.ContainsKey($idx)) { $dns[$idx] = @() }
+    foreach ($addr in @($d.ServerAddresses)) { if ($addr -and ($dns[$idx] -notcontains $addr)) { $dns[$idx] += [string]$addr } }
+}
+
+$result = @()
+foreach ($n in @(Get-NetAdapter)) {
+    $idx = [int]$n.InterfaceIndex
+    $st = $stats[$idx]
+    $if4 = $ipif[$idx]
+    $result += [pscustomobject]@{
+        name = [string]$n.Name
+        description = [string]$n.InterfaceDescription
+        interfaceIndex = $idx
+        status = [string]$n.Status
+        macAddress = if ($n.MacAddress) { [string]$n.MacAddress } else { $null }
+        linkSpeed = if ($n.LinkSpeed) { [string]$n.LinkSpeed } else { $null }
+        mediaType = if ($n.PhysicalMediaType) { [string]$n.PhysicalMediaType } else { $null }
+        isVirtual = (-not [bool]$n.HardwareInterface)
+        ipv4 = @($v4[$idx])
+        ipv6 = @($v6[$idx])
+        gateways = @($gw[$idx])
+        dnsServers = @($dns[$idx])
+        dhcp = [bool]($if4 -and $if4.Dhcp.ToString() -eq 'Enabled')
+        mtu = if ($if4) { [int]$if4.NlMtu } else { $null }
+        bytesReceived = if ($st) { [double]$st.ReceivedBytes } else { 0 }
+        bytesSent = if ($st) { [double]$st.SentBytes } else { 0 }
+    }
+}
+ConvertTo-Json -InputObject @($result) -Depth 4 -Compress
+"#;
+
+    #[tauri::command]
+    pub async fn get_network_adapters() -> Result<Vec<NetworkAdapter>, String> {
+        let trimmed = run_powershell(GET_ADAPTERS_SCRIPT, &[]).await?;
+        if trimmed.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut adapters: Vec<NetworkAdapter> = serde_json::from_str(&trimmed)
+            .map_err(|err| format!("failed to parse powershell output: {err}"))?;
+        adapters.sort_by(|a, b| a.is_virtual.cmp(&b.is_virtual).then_with(|| a.name.cmp(&b.name)));
+        Ok(adapters)
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct ElevatedResult {
+        success: bool,
+        #[serde(default)]
+        error: Option<String>,
+    }
+
+    // Adapters are addressed by InterfaceIndex, not name: `-Name` takes
+    // wildcard patterns, and one stray `*` shouldn't disable every adapter.
+    const ADAPTER_ACTION_WORKER_SCRIPT: &str = r#"
+param(
+    [Parameter(Mandatory)] [string]$InputPath,
+    [Parameter(Mandatory)] [string]$OutputPath
+)
+$ErrorActionPreference = 'Stop'
+try {
+    $req = Get-Content -Raw -LiteralPath $InputPath | ConvertFrom-Json
+    $adapter = Get-NetAdapter -InterfaceIndex ([int]$req.InterfaceIndex) -ErrorAction Stop
+    switch ($req.Action) {
+        'enable'  { Enable-NetAdapter -InputObject $adapter -Confirm:$false -ErrorAction Stop }
+        'disable' { Disable-NetAdapter -InputObject $adapter -Confirm:$false -ErrorAction Stop }
+        'renew'   {
+            $output = & ipconfig.exe /renew $adapter.Name 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) { throw $output.Trim() }
+        }
+        default   { throw 'Unknown action.' }
+    }
+    @{ Success = $true } | ConvertTo-Json -Compress | Set-Content -LiteralPath $OutputPath
+} catch {
+    $ex = $_.Exception
+    while ($ex.InnerException) { $ex = $ex.InnerException }
+    @{ Success = $false; Error = $ex.Message } | ConvertTo-Json -Compress | Set-Content -LiteralPath $OutputPath
+}
+"#;
+
+    async fn run_action(action: &str, interface_index: u32) -> Result<(), String> {
+        let payload = format!("{{\"Action\":\"{action}\",\"InterfaceIndex\":{interface_index}}}");
+        let raw = run_elevated(ADAPTER_ACTION_WORKER_SCRIPT, &payload).await?;
+        let parsed: ElevatedResult =
+            serde_json::from_str(&raw).map_err(|err| format!("failed to parse powershell output: {err}"))?;
+        if parsed.success {
+            Ok(())
+        } else {
+            Err(parsed.error.unwrap_or_else(|| "Unknown error.".to_string()))
+        }
+    }
+
+    #[tauri::command]
+    pub async fn set_adapter_enabled(interface_index: u32, enabled: bool) -> Result<(), String> {
+        run_action(if enabled { "enable" } else { "disable" }, interface_index).await
+    }
+
+    #[tauri::command]
+    pub async fn renew_adapter_dhcp(interface_index: u32) -> Result<(), String> {
+        run_action("renew", interface_index).await
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn parses_adapter_with_collapsed_arrays() {
+            let json = r#"[{"name":"Ethernet","description":"Intel","interfaceIndex":12,"status":"Up","macAddress":"AA-BB","linkSpeed":"1 Gbps","mediaType":null,"isVirtual":false,"ipv4":"10.0.0.2/24","ipv6":[],"gateways":"10.0.0.1","dnsServers":["1.1.1.1","8.8.8.8"],"dhcp":true,"mtu":1500,"bytesReceived":10.0,"bytesSent":5.0}]"#;
+            let a: Vec<NetworkAdapter> = serde_json::from_str(json).unwrap();
+            assert_eq!(a[0].ipv4, vec!["10.0.0.2/24"]);
+            assert_eq!(a[0].dns_servers.len(), 2);
+            assert!(a[0].ipv6.is_empty());
+        }
+    }
+}
+
+// Backs the "DNS Lookup" page: a dig-style query with a chosen record type
+// and an optional specific server. `-DnsOnly` skips the hosts file, LLMNR
+// and mDNS so the answer is what DNS itself says.
+mod dnslookup {
+    use serde::{Deserialize, Serialize};
+
+    use crate::run_powershell;
+
+    const TYPES: [&str; 11] = [
+        "A", "AAAA", "CNAME", "MX", "NS", "TXT", "SOA", "PTR", "SRV", "CAA", "DNSKEY",
+    ];
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct DnsRecord {
+        pub name: String,
+        pub record_type: String,
+        pub ttl: Option<u32>,
+        pub section: String,
+        pub data: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct DnsLookupResult {
+        #[serde(default, deserialize_with = "crate::value_or_vec")]
+        pub records: Vec<DnsRecord>,
+        pub error: Option<String>,
+        pub query_time_ms: u64,
+    }
+
+    const NAME_ENV: &str = "ZAGZIG_LOOKUP_NAME";
+    const TYPE_ENV: &str = "ZAGZIG_LOOKUP_TYPE";
+    const SERVER_ENV: &str = "ZAGZIG_LOOKUP_SERVER";
+
+    const LOOKUP_SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+$params = @{ Name = $env:ZAGZIG_LOOKUP_NAME; Type = $env:ZAGZIG_LOOKUP_TYPE; DnsOnly = $true; ErrorAction = 'Stop' }
+if ($env:ZAGZIG_LOOKUP_SERVER) { $params.Server = $env:ZAGZIG_LOOKUP_SERVER }
+
+function Format-Data($r) {
+    switch ($r.Type.ToString()) {
+        { $_ -in 'A', 'AAAA' } { return [string]$r.IPAddress }
+        { $_ -in 'CNAME', 'NS', 'PTR', 'DNAME' } { return [string]$r.NameHost }
+        'MX' { return "$($r.Preference) $($r.NameExchange)" }
+        'TXT' { return (@($r.Strings) -join '') }
+        'SOA' { return "$($r.PrimaryServer) $($r.NameAdministrator) serial=$($r.SerialNumber) refresh=$($r.TimeToZoneRefresh) retry=$($r.TimeToZoneFailureRetry) expire=$($r.TimeToExpiration) minimum=$($r.DefaultTTL)" }
+        'SRV' { return "$($r.Priority) $($r.Weight) $($r.Port) $($r.NameTarget)" }
+        default { return ((($r | Format-List | Out-String).Trim()) -replace '\s+', ' ') }
+    }
+}
+
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
+$records = @()
+$errorText = $null
+try {
+    foreach ($r in @(Resolve-DnsName @params)) {
+        $records += [pscustomobject]@{
+            name = [string]$r.Name
+            recordType = $r.Type.ToString()
+            ttl = if ($null -ne $r.TTL) { [int]$r.TTL } else { $null }
+            section = $r.Section.ToString()
+            data = [string](Format-Data $r)
+        }
+    }
+} catch {
+    $ex = $_.Exception
+    while ($ex.InnerException) { $ex = $ex.InnerException }
+    $errorText = $ex.Message
+}
+$sw.Stop()
+ConvertTo-Json -InputObject ([pscustomobject]@{ records = @($records); error = $errorText; queryTimeMs = [int64]$sw.ElapsedMilliseconds }) -Depth 4 -Compress
+"#;
+
+    #[tauri::command]
+    pub async fn dns_lookup(
+        name: String,
+        record_type: String,
+        server: Option<String>,
+    ) -> Result<DnsLookupResult, String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("Enter a name to look up.".to_string());
+        }
+        if name.len() > 253
+            || !name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':' | '*'))
+        {
+            return Err("That doesn't look like a valid DNS name.".to_string());
+        }
+        let record_type = record_type.trim().to_ascii_uppercase();
+        if !TYPES.contains(&record_type.as_str()) {
+            return Err("Unsupported record type.".to_string());
+        }
+        let server = server.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        if let Some(server) = server {
+            if server.parse::<std::net::IpAddr>().is_err() {
+                return Err("The DNS server must be an IP address.".to_string());
+            }
+        }
+
+        let mut envs = vec![(NAME_ENV, name), (TYPE_ENV, record_type.as_str())];
+        if let Some(server) = server {
+            envs.push((SERVER_ENV, server));
+        }
+        let trimmed = run_powershell(LOOKUP_SCRIPT, &envs).await?;
+        serde_json::from_str(&trimmed).map_err(|err| format!("failed to parse powershell output: {err}"))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn parses_lookup_result() {
+            let json = r#"{"records":{"name":"a.com","recordType":"A","ttl":60,"section":"Answer","data":"1.2.3.4"},"error":null,"queryTimeMs":12}"#;
+            let r: DnsLookupResult = serde_json::from_str(json).unwrap();
+            assert_eq!(r.records.len(), 1);
+            assert_eq!(r.records[0].data, "1.2.3.4");
         }
     }
 }

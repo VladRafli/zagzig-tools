@@ -72,9 +72,12 @@ and language switcher.
 ### Administrator rights
 
 Some actions need administrator approval — removing an NRPT rule, adding or removing a route,
-changing DNS servers, editing or reordering the hosts file, changing the WinHTTP proxy, force
-restarting WSL, or deleting a certificate from the machine-wide (`Local Machine`) store. The SSH
-Config page and the rest of the WSL page don't need administrator rights.
+changing DNS servers, editing or reordering the hosts file, changing the WinHTTP proxy, adding or
+removing a port proxy rule, enabling, disabling or renewing a network adapter, stopping a Windows
+service, force restarting WSL, or deleting a certificate from the machine-wide (`Local Machine`)
+store. Reading the Ports, Port Proxy, Network Adapters and DNS Lookup pages, the SSH Config page
+and the rest of the WSL page don't need administrator rights, and stopping a process only asks for
+approval if Windows refuses to let you stop it as yourself.
 
 The app itself **never needs to run elevated**. Instead, each privileged action triggers exactly
 one UAC prompt for that specific change — you don't have to relaunch the whole app as
@@ -160,11 +163,56 @@ Details tab would tell you, joined into one view. It needs no administrator righ
   the full executable path and command line.
 - **Refresh**: connections change constantly, so the data is only cached for about ten seconds —
   use the refresh button for a fresh read.
+- **Reserved port ranges**: an expandable section at the bottom lists the TCP and UDP port blocks
+  Windows has reserved (`netsh int ipv4 show excludedportrange`) — Hyper-V, WSL and Docker are the
+  usual owners. A port inside one of these can't be bound by an application even though nothing
+  listens on it, which is the classic cause of "port already in use" with an empty list. If you
+  search for a port number that isn't in use but falls inside a reserved range, the page says so.
+  A `*` marks an administered exclusion (set explicitly rather than picked dynamically).
+- **Free a port**: in an expanded row, **Stop process** force-closes the owning process after a
+  confirmation. It first tries with your own rights and only asks for administrator approval (one
+  UAC prompt) if Windows refuses. If the process hosts Windows services, each gets a **Stop
+  service** button, which is cleaner than killing the process (a service manager may restart a
+  killed process) and requires administrator approval. Critical Windows processes (such as
+  `System`, `csrss.exe`, `lsass.exe`) are never offered, and the app checks the PID still belongs
+  to the same process before stopping it, in case the list is out of date.
 
 Windows hides the executable path and command line of processes owned by other users or the system
-from non-administrator accounts, so those rows show "—" for those fields. The page is read-only;
-it doesn't stop processes. If a process exits between reading the list and clicking its row, the
-details say no information is available.
+from non-administrator accounts, so those rows show "—" for those fields. If a process exits
+between reading the list and clicking its row, the details say no information is available.
+
+### Port Proxy
+
+*Network → Port Proxy*
+
+Manages `netsh interface portproxy` rules, which forward a port on this PC to another address —
+the usual way to reach a service inside WSL or a container from elsewhere on the network. Windows
+has no GUI for them. Viewing rules needs no administrator rights; adding or removing one does
+(one UAC prompt, takes effect immediately).
+
+- **List**: each rule's type (IPv4→IPv4, IPv4→IPv6, IPv6→IPv4 or IPv6→IPv6), the address and port
+  it listens on, and where it forwards to.
+- **Add a rule**: pick the type, then the listen address and port and the connect address (an IP
+  address or hostname) and port. Ports must be 1–65535.
+- **Remove**: deletes a rule after a confirmation.
+
+A rule only forwards traffic — Windows Firewall still has to allow inbound connections on the
+listen port.
+
+### Network Adapters
+
+*Network → Network Adapters*
+
+One card per network adapter: status, IPv4 and IPv6 addresses, default gateway, DNS servers, whether
+DHCP is on, MAC address, link speed, MTU, media type, and bytes received and sent (totals since the
+adapter came up). Physical adapters are listed first; a checkbox hides virtual ones (WSL, Hyper-V,
+VPN and similar). Viewing needs no administrator rights.
+
+- **Enable / Disable**: turns the adapter on or off. Requires administrator rights.
+- **Renew DHCP**: asks the DHCP server for a fresh lease (`ipconfig /renew`) — only available for
+  adapters that use DHCP and are enabled. Requires administrator rights.
+
+The data is cached for about fifteen seconds; use the refresh button for a fresh read.
 
 ### Network Routes
 
@@ -189,6 +237,18 @@ this lets you set as many as you need per adapter.
 - **Edit**: opens a dialog to add/remove/reorder servers for that adapter (order is the order
   they're tried). Requires administrator rights.
 - **Reset to automatic**: switches the adapter back to DHCP-provided DNS servers.
+
+### DNS Lookup
+
+*Network → DNS Lookup*
+
+A `dig`-style query tool. Enter a name, pick a record type (A, AAAA, CNAME, MX, NS, TXT, SOA, PTR,
+SRV, CAA or DNSKEY) and, optionally, a specific DNS server to ask (an IP address) — leave it empty
+to use the system resolver. Results show each record's name, type, TTL, section (Answer, Authority
+or Additional) and data, plus the query time. The hosts file, LLMNR and mDNS are skipped, so the
+answer is what DNS itself says — handy for comparing what two servers return, or checking that a
+change has propagated. An unresolvable name shows the resolver's own error (for example "DNS name
+does not exist"). No administrator rights are needed.
 
 ### DNS Cache
 

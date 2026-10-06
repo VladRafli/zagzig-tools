@@ -49,3 +49,26 @@ export function usePorts() {
     refresh,
   };
 }
+
+export interface ExcludedRange {
+  start: number;
+  end: number;
+  administered: boolean;
+}
+
+export interface ExcludedRanges {
+  tcp: ExcludedRange[];
+  udp: ExcludedRange[];
+}
+
+// Reserved ranges change rarely (a Hyper-V/WSL/Docker start or stop), so a
+// minute is plenty.
+export function useExcludedRanges() {
+  const { data } = useCachedInvoke<ExcludedRanges>(
+    "zagzig:excluded-port-ranges",
+    "get_excluded_port_ranges",
+    60 * 1000,
+  );
+
+  return { ranges: data ?? { tcp: [], udp: [] } };
+}
