@@ -161,7 +161,13 @@ function EntryRow({
   return (
     <div
       draggable={isAdministrator}
-      onDragStart={onDragStart}
+      onDragStart={(e) => {
+        // Some webviews cancel a drag that carries no data or effect, which
+        // shows up as the "not allowed" cursor everywhere.
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", String(entry.lineNumber));
+        onDragStart();
+      }}
       onDragOver={onDragOver}
       onDrop={(e) => {
         e.preventDefault();
@@ -283,6 +289,7 @@ function EntryTable({
             onDragOver={(e) => {
               if (dragLine === null) return;
               e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
               setOverLine(entry.lineNumber);
             }}
             onDrop={() => dropOn(entry.lineNumber)}
