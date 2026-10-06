@@ -47,21 +47,13 @@ jobs:
           releaseName: "zagzig-tools ${{ github.ref_name }}"
           # NOTE: this is a static, per-release description — update it
           # before tagging each release (it's plain text, not generated from
-          # commits/changelog). What's below describes v0.5.0 specifically.
+          # commits/changelog). What's below describes v0.5.1 specifically.
           releaseBody: |
-            ## What's new in v0.5.0
+            ## What's new in v0.5.1
 
-            - **WSL** (new page under Network): see which distributions are running, stop one,
-              set the default, shut WSL down, and edit `.wslconfig` (memory, processors, swap,
-              networking and more) with a form or a raw editor.
-            - **Force restart for a broken WSL**: when WSL hangs and `wsl --shutdown` doesn't
-              help, stop the WSL service, kill its leftover processes and start it again,
-              optionally restarting Docker Desktop too. There's also a standalone
-              "Restart Docker Desktop" button. WSL status checks now time out instead of
-              freezing the app.
-            - The webview's browser-style right-click menu is gone (it stays on text fields and
-              selected text).
-            - The user manual now covers SSH Config, WSL and drag-to-reorder in Hosts File.
+            - **Check for updates** now says what it found: "You're up to date (v0.5.1)" names
+              the running version, and a failed check shows the actual error instead of a
+              generic message, so a missed update can be diagnosed.
 
             See the assets below to download this release.
 

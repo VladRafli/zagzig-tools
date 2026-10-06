@@ -3585,7 +3585,7 @@ dependencies = [
 
 [[package]]
 name = "zagzig-tui"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "crossterm",
  "hickory-resolver",
