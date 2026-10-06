@@ -47,23 +47,24 @@ jobs:
           releaseName: "zagzig-tools ${{ github.ref_name }}"
           # NOTE: this is a static, per-release description — update it
           # before tagging each release (it's plain text, not generated from
-          # commits/changelog). What's below describes v0.10.0 specifically.
+          # commits/changelog). What's below describes v0.11.0 specifically.
           releaseBody: |
-            ## What's new in v0.10.0
+            ## What's new in v0.11.0
 
-            - **Environment Variables** (new page under System): view and edit your user and
-              system environment variables, including `PATH`.
-              - `PATH` and other `;`-separated values open in a list editor: reorder, edit and
-                remove entries, see which folders don't exist, spot duplicates, and clean up in one
-                click.
-              - Values are saved exactly as stored — `%SystemRoot%` stays a reference instead of
-                being replaced by `C:\Windows` — and the plain/expandable type is preserved.
-              - Every change is recorded with the value it replaced and can be undone. Windows'
-                own core variables (`Path`, `ComSpec`, `SystemRoot`, ...) can be edited but not
-                deleted.
-              - Editing your own variables needs no administrator rights; system variables ask for
-                approval. Programs that are already running keep their old environment until
-                restarted.
+            - **TLS Inspector** (new page under Dev Tools): connect to a host and port and see its
+              certificate, the chain behind it, when it expires, and whether Windows trusts it —
+              handy for working out why a tool rejects a local or internal HTTPS service.
+            - **Wake-on-LAN** (new page under Network): turn on a PC that's off or asleep with a
+              magic packet. Saved devices, sent from your physical adapters, with an optional check
+              that the PC came up. The other PC needs no software.
+            - **Port Scanner** (new page under Network): a simple TCP connect scan of one host,
+              with presets and custom ports.
+            - **Startup** (new page under System): see what starts at sign-in and switch entries
+              off and on — the same switch Task Manager uses.
+            - **Fixed**: accented and non-Latin text from Windows (localized event messages, Wi-Fi
+              names, file paths) could arrive damaged, and elevated actions could corrupt non-ASCII
+              values, such as an accented path saved into a system environment variable. Text now
+              stays intact end to end.
 
             See the assets below to download this release.
 
