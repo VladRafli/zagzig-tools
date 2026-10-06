@@ -47,29 +47,23 @@ jobs:
           releaseName: "zagzig-tools ${{ github.ref_name }}"
           # NOTE: this is a static, per-release description — update it
           # before tagging each release (it's plain text, not generated from
-          # commits/changelog). What's below describes v0.9.0 specifically.
+          # commits/changelog). What's below describes v0.10.0 specifically.
           releaseBody: |
-            ## What's new in v0.9.0
+            ## What's new in v0.10.0
 
-            - **Languages — add any language** (new page under Overview): English and Indonesian
-              are built in, and any other language is a single JSON file you add without waiting
-              for a release. Export a template (from English or Indonesian), translate it, and
-              import it; it appears in the language selector right away. Missing strings fall back
-              to English, translations that lose a `{{placeholder}}` are skipped so a screen can't
-              break, and right-to-left languages are supported.
-            - **User Manual in the app** (Overview): the whole manual, with a searchable table of
-              contents.
-            - **Firewall**: list every Windows Defender Firewall rule, search and filter them, and
-              turn a rule on or off (administrator approval).
-            - **Neighbors (ARP)**: view and clear the IPv4 ARP / IPv6 neighbor cache.
-            - **VPN**: see the VPN connections built into Windows and connect or disconnect them.
-            - **Wi-Fi**: saved wireless networks and their security; a saved password can be shown
-              after a confirmation and administrator approval, and is never stored or logged.
-            - **Services** and **Event Log** (new System group): list, start, stop, restart and
-              reconfigure Windows services; and read recent events filtered to network/DNS
-              problems or WSL, Hyper-V and Docker.
-            - **Fixed**: dragging Hosts File entries to reorder them showed a "not allowed" cursor
-              and couldn't be dropped.
+            - **Environment Variables** (new page under System): view and edit your user and
+              system environment variables, including `PATH`.
+              - `PATH` and other `;`-separated values open in a list editor: reorder, edit and
+                remove entries, see which folders don't exist, spot duplicates, and clean up in one
+                click.
+              - Values are saved exactly as stored — `%SystemRoot%` stays a reference instead of
+                being replaced by `C:\Windows` — and the plain/expandable type is preserved.
+              - Every change is recorded with the value it replaced and can be undone. Windows'
+                own core variables (`Path`, `ComSpec`, `SystemRoot`, ...) can be edited but not
+                deleted.
+              - Editing your own variables needs no administrator rights; system variables ask for
+                approval. Programs that are already running keep their old environment until
+                restarted.
 
             See the assets below to download this release.
 
