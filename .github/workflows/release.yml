@@ -47,17 +47,25 @@ jobs:
           releaseName: "zagzig-tools ${{ github.ref_name }}"
           # NOTE: this is a static, per-release description — update it
           # before tagging each release (it's plain text, not generated from
-          # commits/changelog). What's below describes v0.6.0 specifically.
+          # commits/changelog). What's below describes v0.7.0 specifically.
           releaseBody: |
-            ## What's new in v0.6.0
+            ## What's new in v0.7.0
 
             - **Ports** (new page under Network): see which application is using which port —
-              every TCP connection and UDP endpoint joined to its owning process. Filter by
-              state and protocol, search by port, PID, name or path, and click a row for the
-              process's executable path, command line, company, version, parent, memory and the
-              Windows services it hosts. No administrator rights needed.
-            - The user manual and README now cover the Ports page and the clearer
-              "Check for updates" messages.
+              every TCP connection and UDP endpoint joined to its owning process, with filters,
+              search, and the process's path, command line, company, version, parent, memory and
+              hosted Windows services. It also lists the port ranges Windows has reserved
+              (Hyper-V, WSL, Docker) and warns when a port you search for sits inside one — the
+              classic "port already in use" with nothing listening. **Stop process** and **Stop
+              service** buttons free a port after a confirmation.
+            - **Port Proxy** (new page): view, add and remove `netsh interface portproxy`
+              forwarding rules — the usual way to reach a WSL or container service from the
+              network. Adding or removing a rule needs administrator approval.
+            - **Network Adapters** (new page): each adapter's addresses, gateway, DNS servers,
+              DHCP state, link speed and traffic counters, with enable/disable and DHCP renew.
+            - **DNS Lookup** (new page): a `dig`-style query with a chosen record type and an
+              optional DNS server to ask.
+            - The user manual and README cover all of the above.
 
             See the assets below to download this release.
 
