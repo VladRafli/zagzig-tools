@@ -18,6 +18,8 @@ Looking for how to use the app rather than how it's built? See the
 | Feature | What it does |
 | --- | --- |
 | Dashboard | At-a-glance status for the features below, with quick links into each |
+| User Manual | This project's user manual, built into the app with a searchable table of contents (English only) |
+| Languages | English and Indonesian built in; add any other language as a JSON file — export a template, translate it, import it, no rebuild needed |
 | NRPT Rules | View Name Resolution Policy Table rules — what `Add-DnsClientNrptRule` configures |
 | Connection Test | Ping + traceroute a host in plain language: is it reachable, and what path did it take |
 | Network Routes | View and manage the Windows IP routing table (`route print`/`add`/`delete`, with a GUI) |

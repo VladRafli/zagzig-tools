@@ -16,7 +16,9 @@ import {
   Terminal,
   Timer,
   Waypoints,
+  BookOpen,
   Boxes,
+  Languages,
   Cog,
   ScrollText,
   Share2,
@@ -38,6 +40,8 @@ export interface NavGroup {
 
 export type NavId =
   | "dashboard"
+  | "manual"
+  | "languages"
   | "nrpt-rules"
   | "connection-test"
   | "ports"
@@ -66,6 +70,8 @@ export const navGroups: NavGroup[] = [
     labelKey: "nav.overview",
     items: [
       { id: "dashboard", labelKey: "nav.dashboard", icon: LayoutDashboard },
+      { id: "manual", labelKey: "nav.manual", icon: BookOpen },
+      { id: "languages", labelKey: "nav.languages", icon: Languages },
     ],
   },
   {

@@ -67,6 +67,8 @@ const id: typeof en = {
     services: "Layanan",
     eventLog: "Log Peristiwa",
     dashboard: "Dasbor",
+    manual: "Panduan Pengguna",
+    languages: "Bahasa",
     nrptRules: "Aturan NRPT",
     connectionTest: "Uji Koneksi",
     networkRoutes: "Rute Jaringan",
@@ -690,6 +692,57 @@ const id: typeof en = {
       noKey:
         "Tidak ada kata sandi tersimpan — jaringan ini terbuka atau memakai sertifikat atau login enterprise (802.1X).",
     },
+  },
+  languages: {
+    title: "Bahasa",
+    subtitle:
+      "Bahasa Inggris dan Indonesia sudah ada di aplikasi. Bahasa lain bisa ditambahkan tanpa rilis baru: ekspor template, terjemahkan, lalu tambahkan filenya di sini.",
+    add: "Tambah bahasa…",
+    addSuccess: "{{name}} ditambahkan.",
+    addError: "Gagal menambahkan bahasa: {{error}}",
+    openFolder: "Buka folder bahasa",
+    reload: "Muat ulang bahasa",
+    fileFilter: "File bahasa (JSON)",
+    inUse: "Dipakai",
+    use: "Pakai",
+    builtIn: "Bawaan",
+    custom: "Kustom",
+    coverage: "{{percent}}% diterjemahkan",
+    issues:
+      "{{mismatched}} teks memakai placeholder yang berbeda dari teks Inggris dan {{unknown}} tidak dipakai aplikasi — semuanya dilewati.",
+    columns: { language: "Bahasa", type: "Jenis", coverage: "Cakupan" },
+    loadErrors: "Beberapa file bahasa tidak dapat dimuat:",
+    remove: "Hapus bahasa",
+    removeTitle: "Hapus {{name}}?",
+    removeDescription:
+      "Ini menghapus file bahasa dari folder bahasa. Jika bahasa ini sedang dipakai, aplikasi kembali ke bahasa Inggris.",
+    removeConfirm: "Hapus",
+    removeSuccess: "{{name}} dihapus.",
+    removeError: "Gagal menghapus bahasa: {{error}}",
+    cancel: "Batal",
+    howTo: {
+      title: "Tambahkan bahasa Anda sendiri",
+      description:
+        "Satu bahasa adalah satu file JSON dengan struktur yang sama seperti file bahasa Inggris.",
+      step1: "Ekspor template di bawah — bahasa Inggris, atau Indonesia jika lebih dekat dengan bahasa Anda.",
+      step2:
+        "Buka di editor teks. Di \"$meta\", isi \"code\" (misalnya \"fr\" atau \"pt-br\") dan \"name\" (nama bahasa yang ditampilkan, dalam bahasa itu sendiri). Tambahkan \"dir\": \"rtl\" untuk bahasa yang ditulis dari kanan ke kiri.",
+      step3:
+        "Terjemahkan nilai teksnya. Biarkan kunci, serta placeholder dalam kurung kurawal ganda (seperti {{example}}) dan tag bernomor seperti <0>…</0>, tetap sama persis. Simpan sebagai <kode>.json, misalnya fr.json.",
+      step4: "Pilih “Tambah bahasa…” dan pilih filenya. Bahasa itu muncul di daftar dan di pemilih bahasa.",
+      note: "Teks yang tidak diterjemahkan memakai bahasa Inggris, jadi terjemahan sebagian pun bisa dipakai. Teks yang placeholder-nya tidak sama dengan teks Inggris dilewati. Beberapa bahasa butuh bentuk jamak tambahan (seperti _few atau _many) — tambahkan di samping _one dan _other yang sudah ada.",
+    },
+    templateFrom: "Bahasa template",
+    templateOption: "Mulai dari {{name}}",
+    exportTemplate: "Ekspor template…",
+    exportSuccess: "Template disimpan.",
+    exportError: "Gagal menyimpan template: {{error}}",
+  },
+  manual: {
+    searchPlaceholder: "Cari di panduan…",
+    contents: "Daftar isi",
+    noResults: "Tidak ada bagian yang cocok.",
+    englishOnly: "Panduan ini hanya tersedia dalam bahasa Inggris.",
   },
   dnsCache: {
     title: "Cache DNS",

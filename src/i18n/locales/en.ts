@@ -65,6 +65,8 @@ const en = {
     services: "Services",
     eventLog: "Event Log",
     dashboard: "Dashboard",
+    manual: "User Manual",
+    languages: "Languages",
     nrptRules: "NRPT Rules",
     connectionTest: "Connection Test",
     networkRoutes: "Network Routes",
@@ -686,6 +688,57 @@ const en = {
       noKey:
         "No saved password — this network is open or uses a certificate or enterprise (802.1X) sign-in.",
     },
+  },
+  languages: {
+    title: "Languages",
+    subtitle:
+      "English and Indonesian come with the app. Any other language can be added without a new release: export a template, translate it, and add the file here.",
+    add: "Add language…",
+    addSuccess: "Added {{name}}.",
+    addError: "Couldn't add the language: {{error}}",
+    openFolder: "Open languages folder",
+    reload: "Reload languages",
+    fileFilter: "Language file (JSON)",
+    inUse: "In use",
+    use: "Use",
+    builtIn: "Built in",
+    custom: "Custom",
+    coverage: "{{percent}}% translated",
+    issues:
+      "{{mismatched}} strings use different placeholders than the English text and {{unknown}} aren't used by the app — they were skipped.",
+    columns: { language: "Language", type: "Type", coverage: "Coverage" },
+    loadErrors: "Some language files couldn't be loaded:",
+    remove: "Remove language",
+    removeTitle: "Remove {{name}}?",
+    removeDescription:
+      "This deletes the language file from the languages folder. If it is the language in use, the app switches back to English.",
+    removeConfirm: "Remove",
+    removeSuccess: "Removed {{name}}.",
+    removeError: "Couldn't remove the language: {{error}}",
+    cancel: "Cancel",
+    howTo: {
+      title: "Add your own language",
+      description:
+        "A language is a single JSON file with the same structure as the English one.",
+      step1: "Export a template below — English, or Indonesian if that is closer to your language.",
+      step2:
+        "Open it in a text editor. In \"$meta\", set \"code\" (for example \"fr\" or \"pt-br\") and \"name\" (how the language is shown, in its own language). Add \"dir\": \"rtl\" for right-to-left languages.",
+      step3:
+        "Translate the text values. Keep the keys, and keep placeholders in double curly braces (such as {{example}}) and numbered tags such as <0>…</0> exactly as they are. Save the file as <code>.json, for example fr.json.",
+      step4: "Choose “Add language…” and pick the file. It appears in the list and in the language selector.",
+      note: "Strings you leave out fall back to English, so a partial translation works. A string whose placeholders don't match the English text is skipped. Some languages need extra plural forms (such as _few or _many) — add them next to the existing _one and _other.",
+    },
+    templateFrom: "Template language",
+    templateOption: "Start from {{name}}",
+    exportTemplate: "Export template…",
+    exportSuccess: "Saved the template.",
+    exportError: "Couldn't save the template: {{error}}",
+  },
+  manual: {
+    searchPlaceholder: "Search the manual…",
+    contents: "Contents",
+    noResults: "No sections match.",
+    englishOnly: "The manual is available in English only.",
   },
   dnsCache: {
     title: "DNS Cache",

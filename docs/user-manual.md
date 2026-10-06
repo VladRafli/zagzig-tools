@@ -69,6 +69,10 @@ and **Dev Tools**) and the selected page's content on the right. A header bar at
 administrator status; the sidebar footer has the update indicator (when relevant), theme switcher,
 and language switcher.
 
+This manual is built into the app: open **User Manual** under **Overview** in the sidebar to read it
+there, with a searchable table of contents. It's the same text as this file, and it's in English
+only.
+
 ### Administrator rights
 
 Some actions need administrator approval — removing an NRPT rule, adding or removing a route,
@@ -97,7 +101,38 @@ without having chosen "Run as Administrator".
 ### Theme and language
 
 The sidebar footer has a theme selector (System / Light / Dark) and a language selector. The app
-currently ships English and Indonesian translations.
+ships with English and Indonesian, and any other language can be added without a new release — see
+below.
+
+#### Adding another language
+
+Open **Languages** under **Overview** in the sidebar. A language is a single JSON file with the same
+structure as the English one (the user manual itself stays English-only).
+
+1. Choose a starting point under **Add your own language** — **Start from English**, or **Start from
+   Indonesian** if that's closer to your language — and click **Export template…** to save it.
+2. Open the file in a text editor. In the `$meta` section at the top, set `code` (a short language
+   code such as `fr` or `pt-br`) and `name` (how the language is shown, written in that language).
+   Add `"dir": "rtl"` for a right-to-left language.
+3. Translate the text values. Don't change the keys, and keep `{{placeholders}}` and numbered tags
+   such as `<0>…</0>` exactly as they are. Save the file as `<code>.json`, for example `fr.json`.
+4. Click **Add language…** and pick the file. It appears in the list and in the sidebar's language
+   selector straight away.
+
+Things worth knowing:
+
+- **Partial translations work.** Any string you leave out is shown in English.
+- **Safety checks.** A string whose placeholders don't match the English text is skipped (so a
+  missing `{{name}}` can't break a screen), as is any key the app doesn't have. The Languages page
+  shows how much of the app each language covers and how many strings were skipped.
+- **Plural forms.** Some languages need more plural forms than English's `_one` and `_other` (for
+  example `_few` or `_many`); add them next to the existing ones.
+- **Where they live.** Added languages are stored in the app's data folder
+  (`%APPDATA%\com.vladrafli.zagzig-tools\languages`); **Open languages folder** takes you there. You
+  can copy a file in by hand and click **Reload languages**, or remove a custom language from its
+  row. English and Indonesian are built in and can't be replaced or removed.
+- **Updates.** New versions of the app can add new strings; they show up in English in your
+  language until you translate them. Export a fresh template to see what's new.
 
 ### Checking for updates
 

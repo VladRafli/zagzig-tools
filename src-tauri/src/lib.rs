@@ -65,6 +65,11 @@ pub fn run() {
             vpn::vpn_action,
             wifi::get_wifi_profiles,
             wifi::reveal_wifi_key,
+            languages::list_language_packs,
+            languages::import_language_pack,
+            languages::remove_language_pack,
+            languages::save_language_template,
+            languages::reveal_languages_folder,
             wsl::get_wsl_status,
             wsl::wsl_terminate_distro,
             wsl::wsl_set_default_distro,
@@ -4991,6 +4996,279 @@ try {
             let w: WifiProfiles = serde_json::from_str(json).unwrap();
             assert_eq!(w.profiles.len(), 1);
             assert!(w.available);
+        }
+    }
+}
+
+// Backs the "Languages" feature: translations beyond the built-in English
+// and Indonesian ship as plain JSON "language packs" that live in the app's
+// data folder (`%APPDATA%\<app id>\languages\<code>.json`), so a new
+// language needs no rebuild — export a template, translate it, import it.
+// This module only stores, validates and lists packs; merging them into
+// i18next (and checking that placeholders survived translation) is done by
+// the frontend.
+mod languages {
+    use std::path::{Path, PathBuf};
+
+    use serde::Serialize;
+    use serde_json::{Map, Value};
+    use tauri::Manager;
+
+    const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
+    const MAX_PACKS: usize = 64;
+    const MAX_STRING_LEN: usize = 4000;
+    const MAX_DEPTH: usize = 8;
+    // Shipped in the app itself; a pack can't replace them.
+    const BUILT_IN: [&str; 2] = ["en", "id"];
+
+    #[derive(Debug, Clone, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct LanguagePack {
+        pub code: String,
+        pub name: String,
+        pub dir: String,
+        pub resources: Value,
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct PackError {
+        pub file: String,
+        pub error: String,
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct LanguagePacks {
+        pub packs: Vec<LanguagePack>,
+        pub errors: Vec<PackError>,
+    }
+
+    fn languages_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+        let dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|err| format!("couldn't find the app data folder: {err}"))?
+            .join("languages");
+        std::fs::create_dir_all(&dir).map_err(|err| format!("couldn't create the languages folder: {err}"))?;
+        Ok(dir)
+    }
+
+    // A BCP 47-style tag: a 2–3 letter lowercase language, then up to three
+    // subtags (region, script, ...). Also what makes the code safe to use as
+    // a file name.
+    fn valid_code(code: &str) -> bool {
+        let mut parts = code.split('-');
+        let Some(language) = parts.next() else {
+            return false;
+        };
+        if !(2..=3).contains(&language.len()) || !language.chars().all(|c| c.is_ascii_lowercase()) {
+            return false;
+        }
+        let rest: Vec<&str> = parts.collect();
+        rest.len() <= 3
+            && rest
+                .iter()
+                .all(|p| (2..=8).contains(&p.len()) && p.chars().all(|c| c.is_ascii_alphanumeric()))
+    }
+
+    // Keeps only objects and strings (what i18next resources here are made
+    // of), bounded in depth and length; everything else is dropped.
+    fn sanitize(value: &Value, depth: usize) -> Option<Value> {
+        match value {
+            Value::String(s) if s.chars().count() <= MAX_STRING_LEN => Some(value.clone()),
+            Value::Object(map) if depth < MAX_DEPTH => {
+                let cleaned: Map<String, Value> = map
+                    .iter()
+                    .filter_map(|(k, v)| sanitize(v, depth + 1).map(|v| (k.clone(), v)))
+                    .collect();
+                if cleaned.is_empty() {
+                    None
+                } else {
+                    Some(Value::Object(cleaned))
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn parse_pack(raw: &str) -> Result<LanguagePack, String> {
+        let value: Value = serde_json::from_str(raw).map_err(|err| format!("not valid JSON: {err}"))?;
+        let Value::Object(mut root) = value else {
+            return Err("the file must contain a JSON object.".to_string());
+        };
+        let meta = root
+            .remove("$meta")
+            .ok_or_else(|| "missing the \"$meta\" section (needs a \"code\" and a \"name\").".to_string())?;
+        let code = meta
+            .get("code")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .ok_or_else(|| "\"$meta.code\" is missing.".to_string())?;
+        if !valid_code(code) {
+            return Err(format!(
+                "\"{code}\" isn't a valid language code (use something like \"fr\" or \"pt-br\")."
+            ));
+        }
+        let name = meta
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .ok_or_else(|| "\"$meta.name\" is missing.".to_string())?;
+        if name.chars().count() > 40 || name.chars().any(char::is_control) {
+            return Err("\"$meta.name\" must be 40 characters or fewer.".to_string());
+        }
+        let dir = match meta.get("dir").and_then(Value::as_str) {
+            Some("rtl") => "rtl",
+            _ => "ltr",
+        };
+        let resources = sanitize(&Value::Object(root), 0).ok_or_else(|| "the file contains no translated strings.".to_string())?;
+        Ok(LanguagePack {
+            code: code.to_string(),
+            name: name.to_string(),
+            dir: dir.to_string(),
+            resources,
+        })
+    }
+
+    fn read_limited(path: &Path) -> Result<String, String> {
+        let meta = std::fs::metadata(path).map_err(|err| format!("couldn't read the file: {err}"))?;
+        if meta.len() > MAX_FILE_BYTES {
+            return Err("the file is larger than 2 MB.".to_string());
+        }
+        std::fs::read_to_string(path).map_err(|err| format!("couldn't read the file: {err}"))
+    }
+
+    fn is_json(path: &Path) -> bool {
+        path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("json"))
+    }
+
+    #[tauri::command]
+    pub async fn list_language_packs(app: tauri::AppHandle) -> Result<LanguagePacks, String> {
+        let dir = languages_dir(&app)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            let mut packs = Vec::new();
+            let mut errors = Vec::new();
+            let entries = std::fs::read_dir(&dir).map_err(|err| format!("couldn't read the languages folder: {err}"))?;
+            let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).filter(|p| is_json(p)).collect();
+            paths.sort();
+            for path in paths.into_iter().take(MAX_PACKS) {
+                let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let stem = path.file_stem().map(|n| n.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+                match read_limited(&path).and_then(|raw| parse_pack(&raw)) {
+                    Ok(pack) if BUILT_IN.contains(&pack.code.as_str()) => errors.push(PackError {
+                        file,
+                        error: "English and Indonesian are built in and can't be replaced.".to_string(),
+                    }),
+                    Ok(pack) if pack.code != stem => errors.push(PackError {
+                        file,
+                        error: format!("the file name must match its language code (\"{}.json\").", pack.code),
+                    }),
+                    Ok(pack) => packs.push(pack),
+                    Err(error) => errors.push(PackError { file, error }),
+                }
+            }
+            Ok(LanguagePacks { packs, errors })
+        })
+        .await
+        .map_err(|err| format!("language task failed to run: {err}"))?
+    }
+
+    #[tauri::command]
+    pub async fn import_language_pack(app: tauri::AppHandle, path: String) -> Result<String, String> {
+        let dir = languages_dir(&app)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            let source = PathBuf::from(&path);
+            if !is_json(&source) {
+                return Err("Choose a .json language file.".to_string());
+            }
+            let raw = read_limited(&source)?;
+            let pack = parse_pack(&raw).map_err(|err| format!("That file can't be used: {err}"))?;
+            if BUILT_IN.contains(&pack.code.as_str()) {
+                return Err("English and Indonesian are built in and can't be replaced — use a different language code.".to_string());
+            }
+            std::fs::write(dir.join(format!("{}.json", pack.code)), raw)
+                .map_err(|err| format!("couldn't save the language: {err}"))?;
+            Ok(pack.code)
+        })
+        .await
+        .map_err(|err| format!("language task failed to run: {err}"))?
+    }
+
+    #[tauri::command]
+    pub async fn remove_language_pack(app: tauri::AppHandle, code: String) -> Result<(), String> {
+        if !valid_code(&code) || BUILT_IN.contains(&code.as_str()) {
+            return Err("That language can't be removed.".to_string());
+        }
+        let file = languages_dir(&app)?.join(format!("{code}.json"));
+        match std::fs::remove_file(&file) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(format!("couldn't remove the language: {err}")),
+        }
+    }
+
+    // Writes a template the user picked a destination for (from a save
+    // dialog). Limited to small .json files.
+    #[tauri::command]
+    pub async fn save_language_template(path: String, content: String) -> Result<(), String> {
+        let target = PathBuf::from(&path);
+        if !is_json(&target) {
+            return Err("The file name must end in .json.".to_string());
+        }
+        if content.len() as u64 > MAX_FILE_BYTES {
+            return Err("The template is too large.".to_string());
+        }
+        tauri::async_runtime::spawn_blocking(move || {
+            std::fs::write(&target, content).map_err(|err| format!("couldn't save the file: {err}"))
+        })
+        .await
+        .map_err(|err| format!("language task failed to run: {err}"))?
+    }
+
+    #[tauri::command]
+    pub async fn reveal_languages_folder(app: tauri::AppHandle) -> Result<(), String> {
+        let dir = languages_dir(&app)?;
+        std::process::Command::new("explorer.exe")
+            .arg(dir)
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| format!("couldn't open the folder: {err}"))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn validates_codes() {
+            assert!(valid_code("fr") && valid_code("pt-br") && valid_code("zh-hans-cn") && valid_code("fil"));
+            assert!(!valid_code("") && !valid_code("EN") && !valid_code("e") && !valid_code("en_US"));
+            assert!(!valid_code("../x") && !valid_code("fr-") && !valid_code("a-b-c-d-e-f"));
+        }
+
+        #[test]
+        fn parses_a_pack_and_drops_non_strings() {
+            let raw = r#"{"$meta":{"code":"fr","name":"Français","dir":"ltr"},"app":{"title":"Titre","n":5,"list":["a"]},"x":null}"#;
+            let pack = parse_pack(raw).unwrap();
+            assert_eq!(pack.code, "fr");
+            assert_eq!(pack.resources, serde_json::json!({ "app": { "title": "Titre" } }));
+        }
+
+        #[test]
+        fn rejects_bad_packs() {
+            assert!(parse_pack("[]").is_err());
+            assert!(parse_pack(r#"{"app":{"a":"b"}}"#).is_err());
+            assert!(parse_pack(r#"{"$meta":{"code":"Fr","name":"x"},"a":"b"}"#).is_err());
+            assert!(parse_pack(r#"{"$meta":{"code":"fr"},"a":"b"}"#).is_err());
+            assert!(parse_pack(r#"{"$meta":{"code":"fr","name":"x"}}"#).is_err());
+        }
+
+        #[test]
+        fn reads_rtl() {
+            let pack = parse_pack(r#"{"$meta":{"code":"ar","name":"العربية","dir":"rtl"},"a":"b"}"#).unwrap();
+            assert_eq!(pack.dir, "rtl");
         }
     }
 }

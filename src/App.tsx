@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Suspense, lazy, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -42,6 +42,12 @@ import { VpnPage } from "@/features/vpn/vpn-page";
 import { WifiPage } from "@/features/wifi/wifi-page";
 import { ServicesPage } from "@/features/services/services-page";
 import { EventLogPage } from "@/features/event-log/event-log-page";
+import { LanguagesPage } from "@/features/languages/languages-page";
+
+// The manual pulls in a Markdown renderer, so it loads only when opened.
+const ManualPage = lazy(() =>
+  import("@/features/manual/manual-page").then((m) => ({ default: m.ManualPage })),
+);
 import { NrptRulesPage } from "@/features/nrpt/nrpt-rules-page";
 import { ProxyPage } from "@/features/proxy/proxy-page";
 import { RoutingPage } from "@/features/routing/routing-page";
@@ -115,6 +121,12 @@ function App() {
           </header>
           <main className="min-h-0 flex-1 overflow-y-auto p-6">
             {active === "dashboard" && <DashboardPage onNavigate={setActive} />}
+            {active === "languages" && <LanguagesPage />}
+            {active === "manual" && (
+              <Suspense fallback={null}>
+                <ManualPage />
+              </Suspense>
+            )}
             {active === "nrpt-rules" && <NrptRulesPage />}
             {active === "connection-test" && <ConnectionTestPage />}
             {active === "ports" && <PortsPage />}

@@ -7,30 +7,23 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { setLanguage, type SupportedLanguage } from "@/i18n";
-
-const LANGUAGE_NAMES: Record<SupportedLanguage, string> = {
-  en: "English",
-  id: "Bahasa Indonesia",
-};
+import { setLanguage, useLanguages } from "@/i18n";
 
 export function LanguageSwitcher() {
   const { i18n } = useTranslation();
+  const languages = useLanguages();
 
   return (
-    <Select
-      value={i18n.language}
-      onValueChange={(value) => setLanguage(value as SupportedLanguage)}
-    >
+    <Select value={i18n.language} onValueChange={(value) => setLanguage(value as string)}>
       <SelectTrigger size="sm" className="w-full">
         <SelectValue>
-          {(value: SupportedLanguage) => LANGUAGE_NAMES[value] ?? value}
+          {(value: string) => languages.find((l) => l.code === value)?.name ?? value}
         </SelectValue>
       </SelectTrigger>
       <SelectContent>
-        {Object.entries(LANGUAGE_NAMES).map(([code, name]) => (
-          <SelectItem key={code} value={code}>
-            {name}
+        {languages.map((language) => (
+          <SelectItem key={language.code} value={language.code}>
+            {language.name}
           </SelectItem>
         ))}
       </SelectContent>
