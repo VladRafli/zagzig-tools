@@ -47,13 +47,17 @@ jobs:
           releaseName: "zagzig-tools ${{ github.ref_name }}"
           # NOTE: this is a static, per-release description — update it
           # before tagging each release (it's plain text, not generated from
-          # commits/changelog). What's below describes v0.5.1 specifically.
+          # commits/changelog). What's below describes v0.6.0 specifically.
           releaseBody: |
-            ## What's new in v0.5.1
+            ## What's new in v0.6.0
 
-            - **Check for updates** now says what it found: "You're up to date (v0.5.1)" names
-              the running version, and a failed check shows the actual error instead of a
-              generic message, so a missed update can be diagnosed.
+            - **Ports** (new page under Network): see which application is using which port —
+              every TCP connection and UDP endpoint joined to its owning process. Filter by
+              state and protocol, search by port, PID, name or path, and click a row for the
+              process's executable path, command line, company, version, parent, memory and the
+              Windows services it hosts. No administrator rights needed.
+            - The user manual and README now cover the Ports page and the clearer
+              "Check for updates" messages.
 
             See the assets below to download this release.
 

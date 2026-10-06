@@ -138,6 +138,34 @@ Enter a hostname or IP and run a test to see:
 Both run from a single "Run test" action, and your last several tests are kept in a **History**
 list you can re-run or clear.
 
+### Ports
+
+*Network → Ports*
+
+Shows which application is using which port — what `netstat -ano` plus a trip to Task Manager's
+Details tab would tell you, joined into one view. It needs no administrator rights.
+
+- **List**: every TCP connection and UDP endpoint, sorted by local port, with its protocol, local
+  address, remote address, state, and the owning process and PID. IPv6 addresses are shown in
+  brackets (`[::1]:8080`).
+- **Filters**: a state filter — **Listening** (the default; UDP endpoints are included, since
+  they're bound and waiting for traffic), **Established**, or **All states** — plus a protocol
+  filter (All / TCP / UDP).
+- **Search**: matches port, address, PID, process name, executable path, command line, description,
+  company, and Windows service name — handy for "who is using 8080?" or "what's this `svchost.exe`
+  listening on?".
+- **Process details**: click a row to expand it. You get the process name and PID, description,
+  company and version (from the executable's file properties), start time, parent process, memory
+  use, the Windows services it hosts (which tells you what's behind a shared `svchost.exe`), and
+  the full executable path and command line.
+- **Refresh**: connections change constantly, so the data is only cached for about ten seconds —
+  use the refresh button for a fresh read.
+
+Windows hides the executable path and command line of processes owned by other users or the system
+from non-administrator accounts, so those rows show "—" for those fields. The page is read-only;
+it doesn't stop processes. If a process exits between reading the list and clicking its row, the
+details say no information is available.
+
 ### Network Routes
 
 *Network → Network Routes*
@@ -361,8 +389,10 @@ Both apps check this repo's latest GitHub release on startup, again automaticall
 the background, and any time you ask them to.
 
 **Desktop app**: the sidebar footer always has an update control. Most of the time it reads
-"Check for updates" — click it to check on demand (you'll get a toast either way: up to date, or
-couldn't check). When a newer version exists, that same spot turns into a prominent button showing
+"Check for updates" — click it to check on demand (you'll get a toast either way: "You're up to
+date (vX.Y.Z)", naming the version you're running, or "Couldn't check for updates" followed by the
+actual reason). A release only counts once it's published on GitHub — drafts are ignored, and the
+installers can take a few minutes to finish uploading. When a newer version exists, that same spot turns into a prominent button showing
 the version number; click it to see release notes and an "Install and restart" button, which
 downloads the update, verifies it against a signing key baked into the app (via Tauri's updater
 plugin — cryptographically signed, not just downloaded over HTTPS), installs it, and restarts.
