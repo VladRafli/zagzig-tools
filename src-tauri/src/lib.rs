@@ -53,6 +53,18 @@ pub fn run() {
             adapters::set_adapter_enabled,
             adapters::renew_adapter_dhcp,
             dnslookup::dns_lookup,
+            firewall::get_firewall,
+            firewall::set_firewall_rule_enabled,
+            neighbors::get_neighbors,
+            neighbors::remove_neighbor,
+            neighbors::clear_neighbors,
+            services::get_services,
+            services::service_action,
+            eventlog::get_event_log,
+            vpn::get_vpn_connections,
+            vpn::vpn_action,
+            wifi::get_wifi_profiles,
+            wifi::reveal_wifi_key,
             wsl::get_wsl_status,
             wsl::wsl_terminate_distro,
             wsl::wsl_set_default_distro,
@@ -4124,6 +4136,861 @@ ConvertTo-Json -InputObject ([pscustomobject]@{ records = @($records); error = $
             let r: DnsLookupResult = serde_json::from_str(json).unwrap();
             assert_eq!(r.records.len(), 1);
             assert_eq!(r.records[0].data, "1.2.3.4");
+        }
+    }
+}
+
+// Shared by the modules below: every elevated action here has the same
+// shape — a JSON request in, `{Success, Error}` JSON out — so the parsing
+// lives in one place.
+mod elevated_json {
+    use serde::Deserialize;
+
+    use crate::run_elevated;
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct Reply {
+        success: bool,
+        #[serde(default)]
+        error: Option<String>,
+    }
+
+    // Runs `worker` elevated with `payload` as its input and turns its reply
+    // into a plain `Result`.
+    pub async fn run(worker: &str, payload: &str) -> Result<(), String> {
+        let raw = run_elevated(worker, payload).await?;
+        let reply: Reply =
+            serde_json::from_str(raw.trim()).map_err(|err| format!("failed to parse powershell output: {err}"))?;
+        if reply.success {
+            Ok(())
+        } else {
+            Err(reply.error.unwrap_or_else(|| "Unknown error.".to_string()))
+        }
+    }
+
+    // The outer shell every worker below shares: read `$req`, run `$body`,
+    // report success or the innermost exception message.
+    pub fn worker(body: &str) -> String {
+        format!(
+            r#"
+param(
+    [Parameter(Mandatory)] [string]$InputPath,
+    [Parameter(Mandatory)] [string]$OutputPath
+)
+$ErrorActionPreference = 'Stop'
+try {{
+    $req = Get-Content -Raw -LiteralPath $InputPath | ConvertFrom-Json
+{body}
+    @{{ Success = $true }} | ConvertTo-Json -Compress | Set-Content -LiteralPath $OutputPath
+}} catch {{
+    $ex = $_.Exception
+    while ($ex.InnerException) {{ $ex = $ex.InnerException }}
+    @{{ Success = $false; Error = $ex.Message }} | ConvertTo-Json -Compress | Set-Content -LiteralPath $OutputPath
+}}
+"#
+        )
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn worker_wraps_body() {
+            let w = super::worker("    Write-Output 1");
+            assert!(w.contains("Write-Output 1") && w.contains("Success = $true") && w.contains("InputPath"));
+        }
+    }
+}
+
+// Backs the "Firewall" page: Windows Defender Firewall rules, listed from
+// the CIM store in bulk (the per-rule cmdlets take a minute on a few hundred
+// rules) and joined to their port and program filters. Reading is
+// unelevated; enabling or disabling a rule is elevated.
+mod firewall {
+    use serde::{Deserialize, Serialize};
+
+    use crate::{elevated_json, run_powershell};
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct FirewallRule {
+        pub name: String,
+        pub display_name: String,
+        pub enabled: bool,
+        pub direction: String,
+        pub action: String,
+        pub profile: String,
+        pub protocol: String,
+        pub local_port: String,
+        pub remote_port: String,
+        pub program: Option<String>,
+        pub group: Option<String>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct FirewallProfile {
+        pub name: String,
+        pub enabled: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct FirewallSnapshot {
+        #[serde(default, deserialize_with = "crate::value_or_vec")]
+        pub profiles: Vec<FirewallProfile>,
+        #[serde(default, deserialize_with = "crate::value_or_vec")]
+        pub rules: Vec<FirewallRule>,
+    }
+
+    // CIM exposes the rule's enums as numbers: Direction 1/2, Action 2/4
+    // (3 = allow if secure), Enabled 1/2 and Profiles as a bitmask
+    // (1 Domain, 2 Private, 4 Public; 0 or 7 = all).
+    const GET_FIREWALL_SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+$ns = 'root/StandardCimv2'
+
+$ports = @{}
+foreach ($p in @(Get-CimInstance -Namespace $ns MSFT_NetProtocolPortFilter -ErrorAction SilentlyContinue)) { $ports[$p.InstanceID] = $p }
+$apps = @{}
+foreach ($a in @(Get-CimInstance -Namespace $ns MSFT_NetApplicationFilter -ErrorAction SilentlyContinue)) {
+    if ($a.AppPath) { $apps[$a.InstanceID] = [string]$a.AppPath }
+}
+
+function Format-Profile([int]$mask) {
+    if ($mask -eq 0 -or ($mask -band 7) -eq 7) { return 'Any' }
+    $names = @()
+    if ($mask -band 1) { $names += 'Domain' }
+    if ($mask -band 2) { $names += 'Private' }
+    if ($mask -band 4) { $names += 'Public' }
+    return ($names -join ', ')
+}
+
+function Join-Ports($value) {
+    $items = @($value | Where-Object { $_ })
+    if ($items.Count -eq 0) { return 'Any' }
+    return ($items -join ',')
+}
+
+$rules = @()
+foreach ($r in @(Get-CimInstance -Namespace $ns MSFT_NetFirewallRule)) {
+    $pf = $ports[$r.InstanceID]
+    $rules += [pscustomobject]@{
+        name = [string]$r.InstanceID
+        displayName = [string]$r.DisplayName
+        enabled = ([int]$r.Enabled -eq 1)
+        direction = if ([int]$r.Direction -eq 1) { 'Inbound' } else { 'Outbound' }
+        action = if ([int]$r.Action -eq 4) { 'Block' } else { 'Allow' }
+        profile = Format-Profile ([int]$r.Profiles)
+        protocol = if ($pf -and $pf.Protocol) { [string]$pf.Protocol } else { 'Any' }
+        localPort = if ($pf) { Join-Ports $pf.LocalPort } else { 'Any' }
+        remotePort = if ($pf) { Join-Ports $pf.RemotePort } else { 'Any' }
+        program = if ($apps.ContainsKey($r.InstanceID)) { $apps[$r.InstanceID] } else { $null }
+        group = if ($r.DisplayGroup) { [string]$r.DisplayGroup } else { $null }
+    }
+}
+
+$profiles = @()
+foreach ($p in @(Get-NetFirewallProfile)) {
+    $profiles += [pscustomobject]@{ name = [string]$p.Name; enabled = ($p.Enabled.ToString() -eq 'True') }
+}
+
+ConvertTo-Json -InputObject ([pscustomobject]@{ profiles = $profiles; rules = $rules }) -Depth 4 -Compress
+"#;
+
+    #[tauri::command]
+    pub async fn get_firewall() -> Result<FirewallSnapshot, String> {
+        let trimmed = run_powershell(GET_FIREWALL_SCRIPT, &[]).await?;
+        if trimmed.is_empty() {
+            return Ok(FirewallSnapshot {
+                profiles: Vec::new(),
+                rules: Vec::new(),
+            });
+        }
+        let mut snapshot: FirewallSnapshot = serde_json::from_str(&trimmed)
+            .map_err(|err| format!("failed to parse powershell output: {err}"))?;
+        snapshot
+            .rules
+            .sort_by(|a, b| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()));
+        Ok(snapshot)
+    }
+
+    // `-Name` takes wildcards, so the match is re-checked for an exact,
+    // single rule before anything is changed.
+    fn toggle_worker() -> String {
+        elevated_json::worker(
+            r#"    $matches = @(Get-NetFirewallRule -Name $req.Name -ErrorAction Stop | Where-Object { $_.Name -ceq $req.Name })
+    if ($matches.Count -ne 1) { throw 'That rule no longer exists — refresh and try again.' }
+    if ($req.Enabled) { $matches | Enable-NetFirewallRule } else { $matches | Disable-NetFirewallRule }"#,
+        )
+    }
+
+    #[tauri::command]
+    pub async fn set_firewall_rule_enabled(name: String, enabled: bool) -> Result<(), String> {
+        if name.is_empty() || name.len() > 512 || name.chars().any(char::is_control) {
+            return Err("That doesn't look like a valid rule name.".to_string());
+        }
+        let payload = serde_json::json!({ "Name": name, "Enabled": enabled }).to_string();
+        elevated_json::run(&toggle_worker(), &payload).await
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn parses_snapshot() {
+            let json = r#"{"profiles":[{"name":"Domain","enabled":true}],"rules":{"name":"X","displayName":"Test","enabled":true,"direction":"Inbound","action":"Allow","profile":"Any","protocol":"TCP","localPort":"80","remotePort":"Any","program":null,"group":null}}"#;
+            let s: FirewallSnapshot = serde_json::from_str(json).unwrap();
+            assert_eq!(s.profiles.len(), 1);
+            assert_eq!(s.rules[0].local_port, "80");
+        }
+
+        #[test]
+        fn toggle_worker_guards_exact_match() {
+            assert!(toggle_worker().contains("-ceq $req.Name"));
+        }
+    }
+}
+
+// Backs the "Neighbors" (ARP / NDP) page: the IP-to-MAC cache for IPv4 and
+// IPv6. Reading is unelevated; clearing entries is elevated.
+mod neighbors {
+    use serde::{Deserialize, Serialize};
+
+    use crate::{elevated_json, run_powershell};
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct Neighbor {
+        pub ip_address: String,
+        pub link_layer_address: String,
+        pub state: String,
+        pub interface_index: u32,
+        pub interface_alias: String,
+        pub family: String,
+    }
+
+    const GET_NEIGHBORS_SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+$result = @()
+foreach ($n in @(Get-NetNeighbor)) {
+    $result += [pscustomobject]@{
+        ipAddress = [string]$n.IPAddress
+        linkLayerAddress = [string]$n.LinkLayerAddress
+        state = $n.State.ToString()
+        interfaceIndex = [int]$n.InterfaceIndex
+        interfaceAlias = [string]$n.InterfaceAlias
+        family = $n.AddressFamily.ToString()
+    }
+}
+ConvertTo-Json -InputObject @($result) -Depth 3 -Compress
+"#;
+
+    #[tauri::command]
+    pub async fn get_neighbors() -> Result<Vec<Neighbor>, String> {
+        let trimmed = run_powershell(GET_NEIGHBORS_SCRIPT, &[]).await?;
+        if trimmed.is_empty() {
+            return Ok(Vec::new());
+        }
+        serde_json::from_str(&trimmed).map_err(|err| format!("failed to parse powershell output: {err}"))
+    }
+
+    fn remove_worker() -> String {
+        elevated_json::worker(
+            r#"    $addr = [System.Net.IPAddress]::Parse([string]$req.IpAddress)
+    Remove-NetNeighbor -InterfaceIndex ([int]$req.InterfaceIndex) -IPAddress $addr.ToString() -Confirm:$false -ErrorAction Stop"#,
+        )
+    }
+
+    fn clear_worker() -> String {
+        // Permanent entries are the multicast/broadcast ones Windows keeps
+        // itself; only learned entries are cleared.
+        elevated_json::worker(
+            r#"    Get-NetNeighbor | Where-Object { $_.State -ne 'Permanent' } | Remove-NetNeighbor -Confirm:$false -ErrorAction SilentlyContinue"#,
+        )
+    }
+
+    #[tauri::command]
+    pub async fn remove_neighbor(interface_index: u32, ip_address: String) -> Result<(), String> {
+        if ip_address.parse::<std::net::IpAddr>().is_err() {
+            return Err("That doesn't look like an IP address.".to_string());
+        }
+        let payload = serde_json::json!({ "IpAddress": ip_address, "InterfaceIndex": interface_index }).to_string();
+        elevated_json::run(&remove_worker(), &payload).await
+    }
+
+    #[tauri::command]
+    pub async fn clear_neighbors() -> Result<(), String> {
+        elevated_json::run(&clear_worker(), "{}").await
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn parses_neighbors() {
+            let json = r#"[{"ipAddress":"10.0.0.1","linkLayerAddress":"AA-BB","state":"Reachable","interfaceIndex":12,"interfaceAlias":"Ethernet","family":"IPv4"}]"#;
+            let n: Vec<Neighbor> = serde_json::from_str(json).unwrap();
+            assert_eq!(n[0].interface_index, 12);
+        }
+    }
+}
+
+// Backs the "Services" page: list, start, stop, restart and change the
+// startup type of Windows services. Reading is unelevated; every change is
+// elevated. Services are matched by exact name — `Get-Service -Name` takes
+// wildcards, so the allowed characters exclude them.
+mod services {
+    use serde::{Deserialize, Serialize};
+
+    use crate::{elevated_json, run_powershell};
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct WindowsService {
+        pub name: String,
+        pub display_name: String,
+        pub state: String,
+        pub start_mode: String,
+        pub delayed: bool,
+        pub account: Option<String>,
+        pub path: Option<String>,
+        pub pid: u32,
+        pub description: Option<String>,
+        pub can_stop: bool,
+    }
+
+    const GET_SERVICES_SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+$result = @()
+foreach ($s in @(Get-CimInstance Win32_Service)) {
+    $desc = if ($s.Description) { [string]$s.Description } else { $null }
+    if ($desc -and $desc.Length -gt 500) { $desc = $desc.Substring(0, 500) }
+    $result += [pscustomobject]@{
+        name = [string]$s.Name
+        displayName = [string]$s.DisplayName
+        state = [string]$s.State
+        startMode = [string]$s.StartMode
+        delayed = [bool]$s.DelayedAutoStart
+        account = if ($s.StartName) { [string]$s.StartName } else { $null }
+        path = if ($s.PathName) { [string]$s.PathName } else { $null }
+        pid = [int]$s.ProcessId
+        description = $desc
+        canStop = [bool]$s.AcceptStop
+    }
+}
+ConvertTo-Json -InputObject @($result) -Depth 3 -Compress
+"#;
+
+    #[tauri::command]
+    pub async fn get_services() -> Result<Vec<WindowsService>, String> {
+        let trimmed = run_powershell(GET_SERVICES_SCRIPT, &[]).await?;
+        if trimmed.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut list: Vec<WindowsService> = serde_json::from_str(&trimmed)
+            .map_err(|err| format!("failed to parse powershell output: {err}"))?;
+        list.sort_by(|a, b| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()));
+        Ok(list)
+    }
+
+    const ACTIONS: [&str; 7] = ["start", "stop", "restart", "auto", "auto-delayed", "manual", "disabled"];
+
+    fn valid_name(name: &str) -> bool {
+        !name.is_empty()
+            && name.len() <= 256
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-' | ' ' | '$'))
+    }
+
+    fn worker() -> String {
+        // sc.exe handles every startup type uniformly, including delayed
+        // auto-start, which Set-Service can't express.
+        elevated_json::worker(
+            r#"    $svc = Get-Service -Name $req.Name -ErrorAction Stop | Where-Object { $_.Name -ieq $req.Name } | Select-Object -First 1
+    if (-not $svc) { throw 'That service no longer exists — refresh and try again.' }
+    $startType = $null
+    switch ($req.Action) {
+        'start'        { Start-Service -InputObject $svc -ErrorAction Stop }
+        'stop'         { Stop-Service -InputObject $svc -Force -ErrorAction Stop }
+        'restart'      { Restart-Service -InputObject $svc -Force -ErrorAction Stop }
+        'auto'         { $startType = 'auto' }
+        'auto-delayed' { $startType = 'delayed-auto' }
+        'manual'       { $startType = 'demand' }
+        'disabled'     { $startType = 'disabled' }
+        default        { throw 'Unknown action.' }
+    }
+    if ($startType) {
+        $output = & sc.exe config $svc.Name start= $startType 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) { throw $output.Trim() }
+    }"#,
+        )
+    }
+
+    #[tauri::command]
+    pub async fn service_action(name: String, action: String) -> Result<(), String> {
+        let name = name.trim();
+        if !valid_name(name) {
+            return Err("That doesn't look like a valid service name.".to_string());
+        }
+        if !ACTIONS.contains(&action.as_str()) {
+            return Err("Unknown action.".to_string());
+        }
+        let payload = serde_json::json!({ "Name": name, "Action": action }).to_string();
+        elevated_json::run(&worker(), &payload).await
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn rejects_wildcards_and_quotes() {
+            assert!(valid_name("Dnscache") && valid_name("Windows Time"));
+            assert!(!valid_name("*") && !valid_name("a?b") && !valid_name("x'y") && !valid_name(""));
+        }
+
+        #[test]
+        fn parses_services() {
+            let json = r#"[{"name":"Dnscache","displayName":"DNS Client","state":"Running","startMode":"Auto","delayed":false,"account":"NT AUTHORITY\\NetworkService","path":null,"pid":1234,"description":null,"canStop":true}]"#;
+            let s: Vec<WindowsService> = serde_json::from_str(json).unwrap();
+            assert_eq!(s[0].pid, 1234);
+        }
+    }
+}
+
+// Backs the "Event Log" page: recent System / Application events with a few
+// presets for the things this app is about (network, WSL and Docker).
+// Reading these logs is unelevated (the Security log, which isn't offered,
+// is the one that needs admin).
+mod eventlog {
+    use serde::{Deserialize, Serialize};
+
+    use crate::run_powershell;
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct EventEntry {
+        pub time: String,
+        pub level: u8,
+        pub provider: String,
+        pub id: u32,
+        pub log: String,
+        pub message: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct EventLogResult {
+        #[serde(default, deserialize_with = "crate::value_or_vec")]
+        pub events: Vec<EventEntry>,
+        pub error: Option<String>,
+    }
+
+    // One query = a log (channel) plus provider-name patterns to look for in
+    // it (`*` allowed; empty = no provider filter). A preset is a list of
+    // them, run one at a time: Windows rejects a whole query when a named
+    // provider or channel isn't installed on this machine (common for Docker
+    // and Hyper-V), so missing ones have to be skippable individually.
+    #[derive(Serialize)]
+    struct Query {
+        log: &'static str,
+        providers: Vec<&'static str>,
+    }
+
+    fn q(log: &'static str, providers: &[&'static str]) -> Query {
+        Query {
+            log,
+            providers: providers.to_vec(),
+        }
+    }
+
+    fn preset(id: &str) -> Option<Vec<Query>> {
+        match id {
+            "system" => Some(vec![q("System", &[])]),
+            "application" => Some(vec![q("Application", &[])]),
+            "network" => Some(vec![
+                q(
+                    "System",
+                    &[
+                        "Tcpip",
+                        "Tcpip6",
+                        "NetBT",
+                        "Microsoft-Windows-Dhcp-Client",
+                        "Microsoft-Windows-DNS-Client",
+                        "Microsoft-Windows-NlaSvc",
+                        "Microsoft-Windows-Iphlpsvc",
+                        "RasClient",
+                        "Microsoft-Windows-RasClient",
+                    ],
+                ),
+                q("Microsoft-Windows-WLAN-AutoConfig/Operational", &[]),
+            ]),
+            "wsl-docker" => {
+                let docker_wsl: &[&'static str] = &[
+                    "Docker*",
+                    "docker*",
+                    "LxssManager",
+                    "WSL*",
+                    "Microsoft-Windows-Subsystem-For-Linux",
+                ];
+                Some(vec![
+                    q("Application", docker_wsl),
+                    q("System", docker_wsl),
+                    q("Microsoft-Windows-Hyper-V-Compute-Admin", &[]),
+                    q("Microsoft-Windows-Hyper-V-Compute-Operational", &[]),
+                    q("Microsoft-Windows-Host-Network-Service-Admin", &[]),
+                    q("Microsoft-Windows-Hyper-V-VmSwitch-Operational", &[]),
+                ])
+            }
+            _ => None,
+        }
+    }
+
+    const LEVELS: [&str; 3] = ["errors", "warnings", "all"];
+
+    const GET_EVENTS_SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+# Windows PowerShell 5.1 hands a JSON array back as one object, so it must
+# not be wrapped in @() (that would nest it).
+$queries = ConvertFrom-Json -InputObject $env:ZAGZIG_EVENT_QUERIES
+if ($queries -isnot [array]) { $queries = @($queries) }
+$start = (Get-Date).AddHours(-[int]$env:ZAGZIG_EVENT_HOURS)
+$level = $null
+switch ($env:ZAGZIG_EVENT_LEVEL) {
+    'errors'   { $level = @(1, 2) }
+    'warnings' { $level = @(1, 2, 3) }
+}
+$text = $env:ZAGZIG_EVENT_TEXT
+$max = [int]$env:ZAGZIG_EVENT_MAX
+# Text search runs on the fetched events, so look further back than the
+# number that will be shown.
+$fetch = if ($text) { 2000 } else { $max }
+
+$events = @()
+$errorText = $null
+foreach ($query in $queries) {
+    $providers = @($query.providers)
+    if ($providers.Count -eq 0) { $providers = @($null) }
+    foreach ($provider in $providers) {
+        $f = @{ LogName = [string]$query.log; StartTime = $start }
+        if ($level) { $f.Level = $level }
+        if ($provider) { $f.ProviderName = [string]$provider }
+        try {
+            foreach ($e in @(Get-WinEvent -FilterHashtable $f -MaxEvents $fetch -ErrorAction Stop)) {
+                $message = ''
+                try { $message = [string]$e.Message } catch {}
+                if ($message.Length -gt 4000) { $message = $message.Substring(0, 4000) }
+                if ($text -and ($message -notlike "*$text*") -and ([string]$e.ProviderName -notlike "*$text*")) { continue }
+                $events += [pscustomobject]@{
+                    time = $e.TimeCreated.ToString('o')
+                    level = if ($null -ne $e.Level) { [int]$e.Level } else { 4 }
+                    provider = [string]$e.ProviderName
+                    id = [int]$e.Id
+                    log = [string]$e.LogName
+                    message = $message
+                }
+            }
+        } catch {
+            $ex = $_.Exception
+            while ($ex.InnerException) { $ex = $ex.InnerException }
+            # An empty result, an uninstalled provider or a channel that
+            # doesn't exist on this machine isn't a failure.
+            if ($ex.Message -notmatch 'No events were found|not an event provider|channel could not be found|specified channel') { $errorText = $ex.Message }
+        }
+    }
+}
+$events = @($events | Sort-Object time -Descending | Select-Object -First $max)
+ConvertTo-Json -InputObject ([pscustomobject]@{ events = $events; error = $errorText }) -Depth 4 -Compress
+"#;
+
+    #[tauri::command]
+    pub async fn get_event_log(
+        preset_id: String,
+        level: String,
+        hours: u32,
+        max_events: u32,
+        text: Option<String>,
+    ) -> Result<EventLogResult, String> {
+        let queries = preset(&preset_id).ok_or_else(|| "Unknown event log preset.".to_string())?;
+        if !LEVELS.contains(&level.as_str()) {
+            return Err("Unknown level.".to_string());
+        }
+        let hours = hours.clamp(1, 24 * 30).to_string();
+        let max_events = max_events.clamp(1, 1000).to_string();
+        let text = text.as_deref().map(str::trim).unwrap_or("");
+        // Only used in a -like pattern; wildcards in it just widen the match.
+        if text.chars().any(char::is_control) || text.len() > 200 {
+            return Err("That search text isn't valid.".to_string());
+        }
+        let queries = serde_json::to_string(&queries).map_err(|err| err.to_string())?;
+
+        let trimmed = run_powershell(
+            GET_EVENTS_SCRIPT,
+            &[
+                ("ZAGZIG_EVENT_QUERIES", queries.as_str()),
+                ("ZAGZIG_EVENT_LEVEL", level.as_str()),
+                ("ZAGZIG_EVENT_HOURS", hours.as_str()),
+                ("ZAGZIG_EVENT_MAX", max_events.as_str()),
+                ("ZAGZIG_EVENT_TEXT", text),
+            ],
+        )
+        .await?;
+        serde_json::from_str(&trimmed).map_err(|err| format!("failed to parse powershell output: {err}"))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn presets_resolve() {
+            assert!(preset("network").is_some() && preset("system").is_some());
+            assert!(preset("security").is_none());
+        }
+
+        #[test]
+        fn parses_result_with_one_event() {
+            let json = r#"{"events":{"time":"2026-10-06T10:00:00.0000000+07:00","level":2,"provider":"Tcpip","id":4199,"log":"System","message":"x"},"error":null}"#;
+            let r: EventLogResult = serde_json::from_str(json).unwrap();
+            assert_eq!(r.events.len(), 1);
+        }
+    }
+}
+
+// Backs the "VPN" page: the built-in Windows VPN profiles (what Settings >
+// Network > VPN manages) with connect/disconnect through `rasdial`. VPN
+// clients that bring their own adapter and app (WireGuard, OpenVPN, vendor
+// clients, ...) aren't Windows VPN profiles and don't show up here. NRPT
+// rules, which this app also manages, are typically tied to such
+// connections.
+mod vpn {
+    use serde::{Deserialize, Serialize};
+
+    use crate::{run_powershell, string_or_vec};
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct VpnProfile {
+        pub name: String,
+        pub server_address: String,
+        pub status: String,
+        pub tunnel_type: String,
+        #[serde(default, deserialize_with = "string_or_vec")]
+        pub auth_methods: Vec<String>,
+        pub split_tunneling: bool,
+        pub remember_credential: bool,
+        pub all_users: bool,
+    }
+
+    const GET_VPN_SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+$result = @()
+foreach ($allUsers in @($false, $true)) {
+    $conns = if ($allUsers) { Get-VpnConnection -AllUserConnection -ErrorAction SilentlyContinue } else { Get-VpnConnection -ErrorAction SilentlyContinue }
+    foreach ($c in @($conns)) {
+        if (-not $c) { continue }
+        $result += [pscustomobject]@{
+            name = [string]$c.Name
+            serverAddress = [string]$c.ServerAddress
+            status = [string]$c.ConnectionStatus
+            tunnelType = [string]$c.TunnelType
+            authMethods = @($c.AuthenticationMethod | ForEach-Object { [string]$_ })
+            splitTunneling = [bool]$c.SplitTunneling
+            rememberCredential = [bool]$c.RememberCredential
+            allUsers = $allUsers
+        }
+    }
+}
+ConvertTo-Json -InputObject @($result) -Depth 3 -Compress
+"#;
+
+    #[tauri::command]
+    pub async fn get_vpn_connections() -> Result<Vec<VpnProfile>, String> {
+        let trimmed = run_powershell(GET_VPN_SCRIPT, &[]).await?;
+        if trimmed.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut list: Vec<VpnProfile> = serde_json::from_str(&trimmed)
+            .map_err(|err| format!("failed to parse powershell output: {err}"))?;
+        list.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        Ok(list)
+    }
+
+    const NAME_ENV: &str = "ZAGZIG_VPN_NAME";
+
+    // The name must be one `Get-VpnConnection` itself reports, so it can
+    // never be mistaken for a rasdial option.
+    const VPN_ACTION_SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+$name = $env:ZAGZIG_VPN_NAME
+$known = @(Get-VpnConnection -ErrorAction SilentlyContinue) + @(Get-VpnConnection -AllUserConnection -ErrorAction SilentlyContinue)
+if (-not ($known | Where-Object { $_.Name -ceq $name })) { throw 'That VPN connection no longer exists — refresh and try again.' }
+$rasArgs = @($name)
+if ($env:ZAGZIG_VPN_ACTION -eq 'disconnect') { $rasArgs += '/disconnect' }
+$output = & rasdial.exe @rasArgs 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0) { throw $output.Trim() }
+"#;
+
+    #[tauri::command]
+    pub async fn vpn_action(name: String, action: String) -> Result<(), String> {
+        if name.is_empty() || name.len() > 256 || name.chars().any(char::is_control) || name.starts_with('/') {
+            return Err("That doesn't look like a valid VPN connection name.".to_string());
+        }
+        if action != "connect" && action != "disconnect" {
+            return Err("Unknown action.".to_string());
+        }
+        run_powershell(VPN_ACTION_SCRIPT, &[(NAME_ENV, name.as_str()), ("ZAGZIG_VPN_ACTION", action.as_str())])
+            .await
+            .map(|_| ())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn parses_profile_with_collapsed_auth_list() {
+            let json = r#"[{"name":"Work","serverAddress":"vpn.example.com","status":"Disconnected","tunnelType":"Ikev2","authMethods":"Eap","splitTunneling":false,"rememberCredential":true,"allUsers":false}]"#;
+            let v: Vec<VpnProfile> = serde_json::from_str(json).unwrap();
+            assert_eq!(v[0].auth_methods, vec!["Eap"]);
+        }
+    }
+}
+
+// Backs the "Wi-Fi" page: the saved wireless profiles on this PC. Profiles
+// are read by exporting them to XML (`netsh wlan export profile`) rather
+// than parsing `netsh wlan show`, whose labels are localized. Viewing a
+// saved password is a deliberate, separate action — it needs administrator
+// approval, the same as Windows' own "View Wi-Fi security key".
+mod wifi {
+    use serde::{Deserialize, Serialize};
+
+    use crate::{run_elevated, run_powershell};
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct WifiProfile {
+        pub name: String,
+        pub authentication: Option<String>,
+        pub encryption: Option<String>,
+        pub connection_mode: Option<String>,
+        pub auto_switch: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct WifiProfiles {
+        pub available: bool,
+        #[serde(default, deserialize_with = "crate::value_or_vec")]
+        pub profiles: Vec<WifiProfile>,
+    }
+
+    const GET_WIFI_SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+$dir = Join-Path ([System.IO.Path]::GetTempPath()) ('zagzig-wifi-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $dir | Out-Null
+$profiles = @()
+$available = $true
+try {
+    $output = & netsh.exe wlan export profile "folder=$dir" 2>&1 | Out-String
+    $files = @(Get-ChildItem -LiteralPath $dir -Filter *.xml -ErrorAction SilentlyContinue)
+    if ($LASTEXITCODE -ne 0 -and $files.Count -eq 0) { $available = $false }
+    foreach ($f in $files) {
+        try {
+            $x = [xml](Get-Content -Raw -LiteralPath $f.FullName)
+            $p = $x.WLANProfile
+            $profiles += [pscustomobject]@{
+                name = [string]$p.name
+                authentication = if ($p.MSM.security.authEncryption.authentication) { [string]$p.MSM.security.authEncryption.authentication } else { $null }
+                encryption = if ($p.MSM.security.authEncryption.encryption) { [string]$p.MSM.security.authEncryption.encryption } else { $null }
+                connectionMode = if ($p.connectionMode) { [string]$p.connectionMode } else { $null }
+                autoSwitch = ([string]$p.autoSwitch -eq 'true')
+            }
+        } catch {}
+    }
+} finally {
+    Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+}
+ConvertTo-Json -InputObject ([pscustomobject]@{ available = $available; profiles = $profiles }) -Depth 3 -Compress
+"#;
+
+    #[tauri::command]
+    pub async fn get_wifi_profiles() -> Result<WifiProfiles, String> {
+        let trimmed = run_powershell(GET_WIFI_SCRIPT, &[]).await?;
+        let mut result: WifiProfiles = serde_json::from_str(&trimmed)
+            .map_err(|err| format!("failed to parse powershell output: {err}"))?;
+        result.profiles.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        Ok(result)
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct KeyReply {
+        success: bool,
+        #[serde(default)]
+        error: Option<String>,
+        #[serde(default)]
+        key: Option<String>,
+    }
+
+    // The exported XML is read and deleted inside the worker; the key only
+    // travels back through the (immediately removed) output file.
+    const REVEAL_KEY_WORKER_SCRIPT: &str = r#"
+param(
+    [Parameter(Mandatory)] [string]$InputPath,
+    [Parameter(Mandatory)] [string]$OutputPath
+)
+$ErrorActionPreference = 'Stop'
+$dir = Join-Path ([System.IO.Path]::GetTempPath()) ('zagzig-wifi-key-' + [guid]::NewGuid().ToString('N'))
+try {
+    $req = Get-Content -Raw -LiteralPath $InputPath | ConvertFrom-Json
+    New-Item -ItemType Directory -Path $dir | Out-Null
+    $output = & netsh.exe wlan export profile "name=$($req.Name)" "folder=$dir" key=clear 2>&1 | Out-String
+    $file = Get-ChildItem -LiteralPath $dir -Filter *.xml -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $file) { throw 'That Wi-Fi profile no longer exists — refresh and try again.' }
+    $x = [xml](Get-Content -Raw -LiteralPath $file.FullName)
+    $key = [string]$x.WLANProfile.MSM.security.sharedKey.keyMaterial
+    @{ Success = $true; Key = $key } | ConvertTo-Json -Compress | Set-Content -LiteralPath $OutputPath
+} catch {
+    $ex = $_.Exception
+    while ($ex.InnerException) { $ex = $ex.InnerException }
+    @{ Success = $false; Error = $ex.Message } | ConvertTo-Json -Compress | Set-Content -LiteralPath $OutputPath
+} finally {
+    Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+}
+"#;
+
+    // Returns `None` for an open network or one that uses certificates /
+    // 802.1X, where there's no stored passphrase to show.
+    #[tauri::command]
+    pub async fn reveal_wifi_key(name: String) -> Result<Option<String>, String> {
+        if name.is_empty() || name.len() > 64 || name.chars().any(|c| c.is_control() || c == '"') {
+            return Err("That doesn't look like a valid Wi-Fi profile name.".to_string());
+        }
+        let payload = serde_json::json!({ "Name": name }).to_string();
+        let raw = run_elevated(REVEAL_KEY_WORKER_SCRIPT, &payload).await?;
+        let reply: KeyReply = serde_json::from_str(raw.trim())
+            .map_err(|err| format!("failed to parse powershell output: {err}"))?;
+        if !reply.success {
+            return Err(reply.error.unwrap_or_else(|| "Unknown error.".to_string()));
+        }
+        Ok(reply.key.filter(|k| !k.is_empty()))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn parses_profiles() {
+            let json = r#"{"available":true,"profiles":{"name":"Home","authentication":"WPA2PSK","encryption":"AES","connectionMode":"auto","autoSwitch":false}}"#;
+            let w: WifiProfiles = serde_json::from_str(json).unwrap();
+            assert_eq!(w.profiles.len(), 1);
+            assert!(w.available);
         }
     }
 }

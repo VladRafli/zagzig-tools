@@ -36,6 +36,12 @@ import { PortsPage } from "@/features/ports/ports-page";
 import { PortProxyPage } from "@/features/port-proxy/port-proxy-page";
 import { AdaptersPage } from "@/features/adapters/adapters-page";
 import { DnsLookupPage } from "@/features/dns-lookup/dns-lookup-page";
+import { FirewallPage } from "@/features/firewall/firewall-page";
+import { NeighborsPage } from "@/features/neighbors/neighbors-page";
+import { VpnPage } from "@/features/vpn/vpn-page";
+import { WifiPage } from "@/features/wifi/wifi-page";
+import { ServicesPage } from "@/features/services/services-page";
+import { EventLogPage } from "@/features/event-log/event-log-page";
 import { NrptRulesPage } from "@/features/nrpt/nrpt-rules-page";
 import { ProxyPage } from "@/features/proxy/proxy-page";
 import { RoutingPage } from "@/features/routing/routing-page";
@@ -115,6 +121,12 @@ function App() {
             {active === "port-proxy" && <PortProxyPage />}
             {active === "network-adapters" && <AdaptersPage />}
             {active === "dns-lookup" && <DnsLookupPage />}
+            {active === "firewall" && <FirewallPage />}
+            {active === "neighbors" && <NeighborsPage />}
+            {active === "vpn" && <VpnPage />}
+            {active === "wifi" && <WifiPage />}
+            {active === "services" && <ServicesPage />}
+            {active === "event-log" && <EventLogPage />}
             {active === "network-routes" && <RoutingPage />}
             {active === "dns-servers" && <DnsPage />}
             {active === "dns-cache" && <DnsCachePage />}

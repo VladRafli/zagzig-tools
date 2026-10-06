@@ -31,6 +31,12 @@ Looking for how to use the app rather than how it's built? See the
 | Hosts File | Edit `C:\Windows\System32\drivers\etc\hosts`, structured or raw, and drag entries to reorder them — no built-in GUI exists for this |
 | SSH Config | Add, edit and remove `Host` entries in `~/.ssh/config`, structured or raw — no admin rights needed |
 | WSL | Stop distros, shut down or force-restart a hung WSL (and Docker Desktop), and edit `.wslconfig` |
+| Firewall | List Windows Defender Firewall rules (direction, action, protocol, port, program) and turn them on or off |
+| Neighbors (ARP) | View and clear the IPv4 ARP / IPv6 neighbor cache — which devices this PC has talked to recently |
+| VPN | See and connect/disconnect the VPN connections built into Windows |
+| Wi-Fi | Saved wireless networks and their security; show a saved password after administrator approval |
+| Services | List Windows services; start, stop, restart and change their startup type |
+| Event Log | Recent System/Application events filtered to network & DNS problems and WSL/Hyper-V/Docker |
 | Proxy Settings | The WinHTTP proxy (`netsh winhttp`) — the machine-wide proxy Windows Update and many background services and CLI tools honor, separate from the one in Settings > Network |
 | Code Signing | Sign and verify files with Authenticode via `signtool.exe`, auto-located from the Windows SDK |
 | Certificate Store | Browse, view details of, export, or delete certificates without `certmgr.msc` |

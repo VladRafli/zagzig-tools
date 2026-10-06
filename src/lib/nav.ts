@@ -17,6 +17,12 @@ import {
   Timer,
   Waypoints,
   Boxes,
+  Cog,
+  ScrollText,
+  Share2,
+  Shield,
+  ShieldCheck,
+  Wifi,
 } from "lucide-react";
 
 export interface NavItem {
@@ -45,6 +51,12 @@ export type NavId =
   | "hosts-file"
   | "ssh-config"
   | "wsl"
+  | "firewall"
+  | "neighbors"
+  | "vpn"
+  | "wifi"
+  | "services"
+  | "event-log"
   | "proxy-settings"
   | "code-signing"
   | "certificate-store";
@@ -72,7 +84,18 @@ export const navGroups: NavGroup[] = [
       { id: "hosts-file", labelKey: "nav.hostsFile", icon: FileCog },
       { id: "ssh-config", labelKey: "nav.sshConfig", icon: Terminal },
       { id: "wsl", labelKey: "nav.wsl", icon: Boxes },
+      { id: "firewall", labelKey: "nav.firewall", icon: Shield },
+      { id: "neighbors", labelKey: "nav.neighbors", icon: Share2 },
+      { id: "vpn", labelKey: "nav.vpn", icon: ShieldCheck },
+      { id: "wifi", labelKey: "nav.wifi", icon: Wifi },
       { id: "proxy-settings", labelKey: "nav.proxySettings", icon: Waypoints },
+    ],
+  },
+  {
+    labelKey: "nav.system",
+    items: [
+      { id: "services", labelKey: "nav.services", icon: Cog },
+      { id: "event-log", labelKey: "nav.eventLog", icon: ScrollText },
     ],
   },
   {

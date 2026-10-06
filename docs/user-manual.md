@@ -64,8 +64,8 @@ updates it installs automatically.
 
 ## 2. Getting started with the desktop app
 
-On first launch you'll see a sidebar on the left (grouped into **Overview**, **Network**, and
-**Dev Tools**) and the selected page's content on the right. A header bar at the top shows your
+On first launch you'll see a sidebar on the left (grouped into **Overview**, **Network**, **System**,
+and **Dev Tools**) and the selected page's content on the right. A header bar at the top shows your
 administrator status; the sidebar footer has the update indicator (when relevant), theme switcher,
 and language switcher.
 
@@ -74,10 +74,13 @@ and language switcher.
 Some actions need administrator approval — removing an NRPT rule, adding or removing a route,
 changing DNS servers, editing or reordering the hosts file, changing the WinHTTP proxy, adding or
 removing a port proxy rule, enabling, disabling or renewing a network adapter, stopping a Windows
-service, force restarting WSL, or deleting a certificate from the machine-wide (`Local Machine`)
-store. Reading the Ports, Port Proxy, Network Adapters and DNS Lookup pages, the SSH Config page
-and the rest of the WSL page don't need administrator rights, and stopping a process only asks for
-approval if Windows refuses to let you stop it as yourself.
+service, turning a firewall rule on or off, clearing ARP/neighbor entries, starting, stopping or
+reconfiguring a service, showing a saved Wi-Fi password, force restarting WSL, or deleting a
+certificate from the machine-wide (`Local Machine`) store. Reading any of these pages — and the
+Ports, Port Proxy, Network Adapters, DNS Lookup, Firewall, Neighbors, VPN, Wi-Fi (profile list),
+Services and Event Log pages — plus the SSH Config page and the rest of the WSL page, don't need
+administrator rights. Connecting or disconnecting a VPN doesn't either, and stopping a process
+only asks for approval if Windows refuses to let you stop it as yourself.
 
 The app itself **never needs to run elevated**. Instead, each privileged action triggers exactly
 one UAC prompt for that specific change — you don't have to relaunch the whole app as
@@ -355,6 +358,68 @@ separate **Restart Docker Desktop** button is also available: it closes Docker D
 helper processes, then launches it again — for when WSL is fine but Docker's integration is
 missing or stuck. It needs no administrator rights, and running containers are stopped.
 
+### Firewall
+
+*Network → Firewall*
+
+Lists every Windows Defender Firewall rule — useful for "why is this port blocked?" next to the
+Ports page. Reading rules needs no administrator rights.
+
+- **Profiles**: whether the Domain, Private and Public firewall profiles are on or off.
+- **Rules**: each rule's name (with its program path or group underneath), direction (inbound or
+  outbound), action (allow or block), protocol, local port and profile. Search matches name,
+  program, group, protocol, ports and profile; filters narrow by direction, action, and
+  enabled/disabled. The list shows 150 rules at a time — use **Show more** for the rest.
+- **Turn a rule on or off**: the switch at the start of each row. Requires administrator rights.
+  The rule is matched by its exact internal name, so a name containing a wildcard can't affect
+  other rules.
+
+Rules can't be created or deleted from here, and the per-profile on/off state is display-only.
+
+### Neighbors (ARP)
+
+*Network → Neighbors (ARP)*
+
+The IP-to-MAC cache Windows keeps for IPv4 (ARP) and IPv6 (neighbor discovery) — which devices
+this PC has recently talked to on the local network, with each entry's state (Reachable, Stale,
+and so on) and the interface it was learned on. Permanent entries (multicast and broadcast
+addresses Windows maintains itself) are hidden unless you tick **Show permanent entries**.
+
+- **Remove an entry** or **Clear cache** (all learned entries) to force fresh lookups — handy after
+  a device changes its IP or MAC. Both require administrator rights; permanent entries are never
+  removed.
+- The data is cached for about fifteen seconds; use the refresh button for a fresh read.
+
+### VPN
+
+*Network → VPN*
+
+The VPN connections built into Windows (the ones under Settings → Network → VPN, for the current
+user and for all users) with their status, server, tunnel type, authentication methods, split
+tunneling and whether credentials are remembered. **Connect** and **Disconnect** use `rasdial`
+and need no administrator rights; a connection that needs credentials you haven't saved will fail
+with Windows' own error message.
+
+VPN apps that bring their own client and adapter (WireGuard, OpenVPN, vendor clients) aren't
+Windows VPN profiles and don't appear here. VPN connections are often what NRPT rules are tied
+to, so this pairs with the NRPT Rules page.
+
+### Wi-Fi
+
+*Network → Wi-Fi*
+
+The wireless networks saved on this PC: name, security (authentication and encryption), whether
+the network connects automatically or manually, and auto-switch. Listing needs no administrator
+rights. If there's no wireless adapter, or the WLAN service isn't running, the page says so.
+
+**Show password** displays a saved network's passphrase — the same information Windows' own "View
+Wi-Fi security key" shows. It needs administrator approval (one UAC prompt) and a confirmation
+step first, because anyone who can see your screen will see the password. The password is read
+only when you confirm, kept only while the window is open (there's a **Copy** button), and is
+never stored, cached or logged by the app. Open networks, and networks that sign in with a
+certificate or 802.1X, have no saved passphrase and the button is disabled or reports that. Only
+saved networks are shown — nearby (scanned) networks aren't listed.
+
 ### Proxy Settings
 
 *Network → Proxy Settings*
@@ -369,6 +434,44 @@ some things still fail.
 - **Reset to direct access**: clears it back to no proxy.
 - **Import from system proxy**: copies whatever's configured under Settings → Network → Proxy into
   WinHTTP — the quick fix when a tool ignores the proxy you already set elsewhere.
+
+### Services
+
+*System → Services*
+
+Windows services, much like `services.msc`: each service's display name, internal name and
+description, whether it's running, and its startup type. Reading needs no administrator rights;
+every change does (one UAC prompt).
+
+- **Search and filters**: search matches name, description, account and path; filter by state
+  (Running / Stopped) and startup type (Automatic / Manual / Disabled). The list shows 100
+  services at a time.
+- **Start, stop, restart**: the buttons on each row. Stopping and restarting also affect services
+  that depend on it, and both ask for confirmation first.
+- **Startup type**: Automatic, Automatic (delayed), Manual or Disabled, changed from the dropdown
+  on the row. Setting a service to Disabled asks for confirmation — a disabled service can't be
+  started even by Windows. Driver-level services (boot/system start) show their type but can't be
+  changed here.
+
+Stopping or disabling a core service can break networking or other Windows features, so go
+carefully. Services are matched by exact name.
+
+### Event Log
+
+*System → Event Log*
+
+Recent Windows events, filtered to what this app is about. Reading these logs needs no
+administrator rights (the Security log, which does, isn't offered).
+
+- **Source**: **Network & DNS** (TCP/IP, DHCP client, DNS client, network location awareness,
+  RAS/VPN and WLAN events), **WSL, Hyper-V & Docker**, or the plain **System** or **Application**
+  log. Sources for Docker and Hyper-V that don't exist on your machine are skipped quietly.
+- **Level**: errors only, errors and warnings, or everything. **Time window**: from the last hour
+  to the last 30 days. **Maximum events**: 100, 200 or 500.
+- **Filter by text**: matches the event message or provider; press Enter to apply it. The text
+  search looks through up to the 2,000 most recent matching events per source.
+- Click an event to see its full message, log and ID. Changing the source, level, window or limit
+  reloads the list; use the refresh button to reload on demand.
 
 ### Code Signing
 
