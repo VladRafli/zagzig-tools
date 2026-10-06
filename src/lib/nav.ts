@@ -18,6 +18,10 @@ import {
   Waypoints,
   BookOpen,
   Boxes,
+  LockKeyhole,
+  Power,
+  Rocket,
+  ScanSearch,
   Variable,
   Languages,
   Cog,
@@ -63,6 +67,10 @@ export type NavId =
   | "services"
   | "event-log"
   | "environment"
+  | "wake-on-lan"
+  | "port-scanner"
+  | "startup"
+  | "tls-inspector"
   | "proxy-settings"
   | "code-signing"
   | "certificate-store";
@@ -83,6 +91,8 @@ export const navGroups: NavGroup[] = [
       { id: "connection-test", labelKey: "nav.connectionTest", icon: Radar },
       { id: "ports", labelKey: "nav.ports", icon: Plug },
       { id: "port-proxy", labelKey: "nav.portProxy", icon: ArrowRightLeft },
+      { id: "port-scanner", labelKey: "nav.portScanner", icon: ScanSearch },
+      { id: "wake-on-lan", labelKey: "nav.wakeOnLan", icon: Power },
       { id: "network-adapters", labelKey: "nav.adapters", icon: Cable },
       { id: "network-routes", labelKey: "nav.networkRoutes", icon: Route },
       { id: "dns-servers", labelKey: "nav.dnsServers", icon: Server },
@@ -105,12 +115,14 @@ export const navGroups: NavGroup[] = [
       { id: "services", labelKey: "nav.services", icon: Cog },
       { id: "event-log", labelKey: "nav.eventLog", icon: ScrollText },
       { id: "environment", labelKey: "nav.environment", icon: Variable },
+      { id: "startup", labelKey: "nav.startup", icon: Rocket },
     ],
   },
   {
     labelKey: "nav.devTools",
     items: [
       { id: "code-signing", labelKey: "nav.codeSigning", icon: FileSignature },
+      { id: "tls-inspector", labelKey: "nav.tlsInspector", icon: LockKeyhole },
       {
         id: "certificate-store",
         labelKey: "nav.certificateStore",

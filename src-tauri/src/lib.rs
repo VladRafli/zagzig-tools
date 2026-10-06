@@ -76,6 +76,16 @@ pub fn run() {
             envvars::get_env_history,
             envvars::undo_env_change,
             envvars::check_path_entries,
+            wol::get_wol_devices,
+            wol::save_wol_device,
+            wol::delete_wol_device,
+            wol::send_wol,
+            portscan::scan_ports,
+            portscan::cancel_port_scan,
+            startup::get_startup_items,
+            startup::set_startup_item_enabled,
+            startup::reveal_in_explorer,
+            tls::inspect_tls,
             wsl::get_wsl_status,
             wsl::wsl_terminate_distro,
             wsl::wsl_set_default_distro,
@@ -126,10 +136,16 @@ fn run_powershell_blocking(script: &str, envs: &[(String, String)]) -> Result<St
     use std::os::windows::process::CommandExt;
     use std::process::Command;
 
+    // PowerShell writes to a pipe in the console's OEM code page by default
+    // (`é` becomes 0x82, `日` becomes `?`), but this side reads UTF-8 — so
+    // every non-ASCII character in any result would arrive damaged. Switching
+    // the output encoding, without a BOM, makes the two agree.
+    let script = format!("[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)\n{script}");
+
     let mut command = Command::new("powershell.exe");
     command
         .creation_flags(CREATE_NO_WINDOW)
-        .args(["-NoProfile", "-NonInteractive", "-Command", script]);
+        .args(["-NoProfile", "-NonInteractive", "-Command", script.as_str()]);
     for (key, value) in envs {
         command.env(key, value);
     }
@@ -193,11 +209,12 @@ fn unique_temp_path(suffix: &str) -> std::path::PathBuf {
 // back whatever the worker wrote to its output file.
 const ELEVATE_OUTER_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
+$launcher = $env:ZAGZIG_ELEVATE_LAUNCHER
 $worker = $env:ZAGZIG_ELEVATE_WORKER
 $inputPath = $env:ZAGZIG_ELEVATE_INPUT
 $outputPath = $env:ZAGZIG_ELEVATE_OUTPUT
 try {
-    Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Hidden -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File', $worker, '-InputPath', $inputPath, '-OutputPath', $outputPath) -Wait
+    Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Hidden -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File', $launcher, '-Worker', $worker, '-InputPath', $inputPath, '-OutputPath', $outputPath) -Wait
 } catch {
     $ex = $_.Exception
     while ($ex.InnerException) { $ex = $ex.InnerException }
@@ -205,7 +222,7 @@ try {
     return
 }
 if (Test-Path -LiteralPath $outputPath) {
-    Get-Content -Raw -LiteralPath $outputPath
+    Get-Content -Raw -Encoding UTF8 -LiteralPath $outputPath
 } else {
     @{ Success = $false; Error = 'The elevation request was cancelled.' } | ConvertTo-Json -Compress
 }
@@ -222,15 +239,24 @@ if (Test-Path -LiteralPath $outputPath) {
 // elevated worker, which itself waits on the user to respond to a UAC
 // prompt — that's an indefinite block, not a quick syscall.
 async fn run_elevated(worker_script: &str, input: &str) -> Result<String, String> {
+    let launcher_path = unique_temp_path("launcher.ps1");
     let worker_path = unique_temp_path("worker.ps1");
     let input_path = unique_temp_path("input.txt");
     let output_path = unique_temp_path("output.json");
 
-    std::fs::write(&worker_path, worker_script)
+    // Windows PowerShell 5.1 reads a file without a byte-order mark as the
+    // ANSI code page, which turns every non-ASCII character in the script or
+    // the request (an accented path, a Wi-Fi password, ...) into garbage. A
+    // UTF-8 BOM makes it read them correctly.
+    let with_bom = |text: &str| format!("\u{feff}{text}");
+    std::fs::write(&launcher_path, with_bom(ELEVATE_LAUNCHER_SCRIPT))
         .map_err(|err| format!("failed to prepare elevation script: {err}"))?;
-    std::fs::write(&input_path, input)
+    std::fs::write(&worker_path, with_bom(worker_script))
+        .map_err(|err| format!("failed to prepare elevation script: {err}"))?;
+    std::fs::write(&input_path, with_bom(input))
         .map_err(|err| format!("failed to prepare request: {err}"))?;
 
+    let launcher_str = launcher_path.to_string_lossy().into_owned();
     let worker_str = worker_path.to_string_lossy().into_owned();
     let input_str = input_path.to_string_lossy().into_owned();
     let output_str = output_path.to_string_lossy().into_owned();
@@ -238,6 +264,7 @@ async fn run_elevated(worker_script: &str, input: &str) -> Result<String, String
     let result = run_powershell(
         ELEVATE_OUTER_SCRIPT,
         &[
+            ("ZAGZIG_ELEVATE_LAUNCHER", launcher_str.as_str()),
             ("ZAGZIG_ELEVATE_WORKER", worker_str.as_str()),
             ("ZAGZIG_ELEVATE_INPUT", input_str.as_str()),
             ("ZAGZIG_ELEVATE_OUTPUT", output_str.as_str()),
@@ -245,12 +272,28 @@ async fn run_elevated(worker_script: &str, input: &str) -> Result<String, String
     )
     .await;
 
+    let _ = std::fs::remove_file(&launcher_path);
     let _ = std::fs::remove_file(&worker_path);
     let _ = std::fs::remove_file(&input_path);
     let _ = std::fs::remove_file(&output_path);
 
     result
 }
+
+// Runs inside the elevated process and calls the worker with output written
+// as UTF-8 by default: the workers all finish with `Set-Content` /
+// `Out-File`, whose default is the ANSI code page and would turn anything
+// outside it into `?`. The preference variable is inherited by the worker's
+// scope, so none of the workers has to know about it.
+const ELEVATE_LAUNCHER_SCRIPT: &str = r#"param(
+    [Parameter(Mandatory)] [string]$Worker,
+    [Parameter(Mandatory)] [string]$InputPath,
+    [Parameter(Mandatory)] [string]$OutputPath
+)
+$PSDefaultParameterValues['Set-Content:Encoding'] = 'UTF8'
+$PSDefaultParameterValues['Out-File:Encoding'] = 'UTF8'
+& $Worker -InputPath $InputPath -OutputPath $OutputPath
+"#;
 
 // PowerShell's ConvertTo-Json collapses single-element arrays down to a bare
 // scalar, so a rule with one namespace/server comes back as a string instead
@@ -5794,6 +5837,912 @@ try {{
     }
 }
 
+// Backs the "Wake-on-LAN" page: sends a magic packet (6 x 0xFF, then the
+// target's MAC address 16 times) as a UDP broadcast, and keeps a small list
+// of saved devices. It's plain UDP from Rust's standard library — no
+// PowerShell and no administrator rights. The target needs nothing
+// installed: its network card recognises the packet while the PC is off.
+mod wol {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
+    use std::path::PathBuf;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    use serde::{Deserialize, Serialize};
+    use tauri::Manager;
+
+    const MAX_DEVICES: usize = 200;
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct WolDevice {
+        #[serde(default)]
+        pub id: String,
+        pub name: String,
+        /// Normalised to `AA-BB-CC-DD-EE-FF`.
+        pub mac: String,
+        /// Address to ping afterwards to see whether it came up.
+        #[serde(default)]
+        pub host: Option<String>,
+        /// Broadcast address to send to; empty means 255.255.255.255.
+        #[serde(default)]
+        pub broadcast: Option<String>,
+        #[serde(default = "default_port")]
+        pub port: u16,
+    }
+
+    fn default_port() -> u16 {
+        9
+    }
+
+    // Accepts AA:BB:CC:DD:EE:FF, AA-BB-..., AABB.CCDD.EEFF and AABBCCDDEEFF.
+    fn parse_mac(text: &str) -> Result<[u8; 6], String> {
+        let hex: String = text.chars().filter(|c| !matches!(c, ':' | '-' | '.' | ' ')).collect();
+        let bad = || "Enter a MAC address such as AA-BB-CC-DD-EE-FF.".to_string();
+        if hex.len() != 12 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(bad());
+        }
+        let mut mac = [0u8; 6];
+        for (i, byte) in mac.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).map_err(|_| bad())?;
+        }
+        if mac == [0xFF; 6] || mac == [0; 6] {
+            return Err("That isn't a device's MAC address.".to_string());
+        }
+        Ok(mac)
+    }
+
+    fn format_mac(mac: &[u8; 6]) -> String {
+        mac.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join("-")
+    }
+
+    fn magic_packet(mac: &[u8; 6]) -> Vec<u8> {
+        let mut packet = vec![0xFF; 6];
+        for _ in 0..16 {
+            packet.extend_from_slice(mac);
+        }
+        packet
+    }
+
+    fn data_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+        let dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|err| format!("couldn't find the app data folder: {err}"))?;
+        std::fs::create_dir_all(&dir).map_err(|err| format!("couldn't create the app data folder: {err}"))?;
+        Ok(dir.join("wol-devices.json"))
+    }
+
+    fn read_devices(path: &PathBuf) -> Vec<WolDevice> {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default()
+    }
+
+    fn write_devices(path: &PathBuf, devices: &[WolDevice]) -> Result<(), String> {
+        let json = serde_json::to_string_pretty(devices).map_err(|err| err.to_string())?;
+        std::fs::write(path, json).map_err(|err| format!("couldn't save the devices: {err}"))
+    }
+
+    fn clean_optional(value: &Option<String>) -> Option<String> {
+        value.as_deref().map(str::trim).filter(|v| !v.is_empty()).map(str::to_string)
+    }
+
+    #[tauri::command]
+    pub async fn get_wol_devices(app: tauri::AppHandle) -> Result<Vec<WolDevice>, String> {
+        let path = data_path(&app)?;
+        tauri::async_runtime::spawn_blocking(move || read_devices(&path))
+            .await
+            .map_err(|err| format!("device task failed to run: {err}"))
+    }
+
+    #[tauri::command]
+    pub async fn save_wol_device(app: tauri::AppHandle, device: WolDevice) -> Result<Vec<WolDevice>, String> {
+        let name = device.name.trim().to_string();
+        if name.is_empty() || name.chars().count() > 60 || name.chars().any(char::is_control) {
+            return Err("Enter a name (up to 60 characters).".to_string());
+        }
+        let mac = format_mac(&parse_mac(&device.mac)?);
+        let host = clean_optional(&device.host);
+        if let Some(h) = &host {
+            if h.len() > 253 || !h.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':')) {
+                return Err("The address to ping isn't valid.".to_string());
+            }
+        }
+        let broadcast = clean_optional(&device.broadcast);
+        if let Some(b) = &broadcast {
+            b.parse::<Ipv4Addr>().map_err(|_| "The broadcast address must be an IPv4 address.".to_string())?;
+        }
+        if device.port == 0 {
+            return Err("The port must be between 1 and 65535.".to_string());
+        }
+
+        let path = data_path(&app)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            let mut devices = read_devices(&path);
+            let id = if device.id.is_empty() {
+                format!("{}", SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0))
+            } else {
+                device.id.clone()
+            };
+            let saved = WolDevice { id: id.clone(), name, mac, host, broadcast, port: device.port };
+            match devices.iter_mut().find(|d| d.id == id) {
+                Some(existing) => *existing = saved,
+                None => {
+                    if devices.len() >= MAX_DEVICES {
+                        return Err("Too many saved devices.".to_string());
+                    }
+                    devices.push(saved);
+                }
+            }
+            write_devices(&path, &devices)?;
+            Ok(devices)
+        })
+        .await
+        .map_err(|err| format!("device task failed to run: {err}"))?
+    }
+
+    #[tauri::command]
+    pub async fn delete_wol_device(app: tauri::AppHandle, id: String) -> Result<Vec<WolDevice>, String> {
+        let path = data_path(&app)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            let mut devices = read_devices(&path);
+            devices.retain(|d| d.id != id);
+            write_devices(&path, &devices)?;
+            Ok(devices)
+        })
+        .await
+        .map_err(|err| format!("device task failed to run: {err}"))?
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct WolSendResult {
+        pub sent_on: u32,
+        pub failures: Vec<String>,
+    }
+
+    // Sends from each given local address (so the packet leaves through the
+    // chosen adapter rather than whichever the OS prefers — often a virtual
+    // WSL/VPN one), or once from the default route if none are given. Three
+    // copies, since UDP can drop one.
+    #[tauri::command]
+    pub async fn send_wol(
+        mac: String,
+        broadcast: Option<String>,
+        port: u16,
+        local_ips: Vec<String>,
+    ) -> Result<WolSendResult, String> {
+        let mac = parse_mac(&mac)?;
+        if port == 0 {
+            return Err("The port must be between 1 and 65535.".to_string());
+        }
+        let target = match clean_optional(&broadcast) {
+            Some(b) => b.parse::<Ipv4Addr>().map_err(|_| "The broadcast address must be an IPv4 address.".to_string())?,
+            None => Ipv4Addr::BROADCAST,
+        };
+        let sources: Vec<Option<Ipv4Addr>> = if local_ips.is_empty() {
+            vec![None]
+        } else {
+            local_ips
+                .iter()
+                .map(|ip| ip.trim().parse::<Ipv4Addr>().map(Some).map_err(|_| format!("\"{ip}\" isn't an IPv4 address.")))
+                .collect::<Result<_, _>>()?
+        };
+
+        tauri::async_runtime::spawn_blocking(move || {
+            let packet = magic_packet(&mac);
+            let mut sent_on = 0;
+            let mut failures = Vec::new();
+            for source in sources {
+                let label = source.map_or_else(|| "default route".to_string(), |ip| ip.to_string());
+                let attempt = (|| -> Result<(), String> {
+                    let bind = SocketAddr::new(IpAddr::V4(source.unwrap_or(Ipv4Addr::UNSPECIFIED)), 0);
+                    let socket = UdpSocket::bind(bind).map_err(|e| e.to_string())?;
+                    socket.set_broadcast(true).map_err(|e| e.to_string())?;
+                    for _ in 0..3 {
+                        socket
+                            .send_to(&packet, SocketAddr::new(IpAddr::V4(target), port))
+                            .map_err(|e| e.to_string())?;
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                    Ok(())
+                })();
+                match attempt {
+                    Ok(()) => sent_on += 1,
+                    Err(err) => failures.push(format!("{label}: {err}")),
+                }
+            }
+            if sent_on == 0 {
+                return Err(format!("Couldn't send the packet — {}", failures.join("; ")));
+            }
+            Ok(WolSendResult { sent_on, failures })
+        })
+        .await
+        .map_err(|err| format!("wake task failed to run: {err}"))?
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn parses_common_mac_formats() {
+            let expected = [0xAA, 0xBB, 0xCC, 0x00, 0x11, 0x22];
+            for text in ["AA:BB:CC:00:11:22", "aa-bb-cc-00-11-22", "AABB.CC00.1122", "aabbcc001122", " AA BB CC 00 11 22 "] {
+                assert_eq!(parse_mac(text).unwrap(), expected, "{text}");
+            }
+            assert_eq!(format_mac(&expected), "AA-BB-CC-00-11-22");
+        }
+
+        #[test]
+        fn rejects_bad_macs() {
+            for text in ["", "AA:BB", "GG:BB:CC:00:11:22", "FF-FF-FF-FF-FF-FF", "00-00-00-00-00-00", "AA:BB:CC:00:11:22:33"] {
+                assert!(parse_mac(text).is_err(), "{text}");
+            }
+        }
+
+        #[test]
+        fn sends_a_magic_packet_over_udp() {
+            let listener = UdpSocket::bind("127.0.0.1:0").unwrap();
+            listener.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let port = listener.local_addr().unwrap().port();
+
+            let result = tauri::async_runtime::block_on(send_wol(
+                "AA-BB-CC-00-11-22".to_string(),
+                Some("127.0.0.1".to_string()),
+                port,
+                vec!["127.0.0.1".to_string()],
+            ))
+            .unwrap();
+            assert_eq!(result.sent_on, 1);
+
+            let mut buf = [0u8; 256];
+            let (len, _) = listener.recv_from(&mut buf).unwrap();
+            assert_eq!(&buf[..len], magic_packet(&[0xAA, 0xBB, 0xCC, 0x00, 0x11, 0x22]).as_slice());
+        }
+
+        #[test]
+        fn refuses_bad_send_arguments() {
+            let send = |mac: &str, broadcast: Option<&str>, port: u16, ips: Vec<&str>| {
+                tauri::async_runtime::block_on(send_wol(
+                    mac.to_string(),
+                    broadcast.map(str::to_string),
+                    port,
+                    ips.into_iter().map(str::to_string).collect(),
+                ))
+            };
+            assert!(send("nope", None, 9, vec![]).is_err());
+            assert!(send("AA-BB-CC-00-11-22", None, 0, vec![]).is_err());
+            assert!(send("AA-BB-CC-00-11-22", Some("not-an-ip"), 9, vec![]).is_err());
+            assert!(send("AA-BB-CC-00-11-22", None, 9, vec!["1.2.3"]).is_err());
+        }
+
+        #[test]
+        fn builds_a_102_byte_magic_packet() {
+            let mac = [1, 2, 3, 4, 5, 6];
+            let p = magic_packet(&mac);
+            assert_eq!(p.len(), 102);
+            assert!(p[..6].iter().all(|b| *b == 0xFF));
+            assert!(p[6..].chunks(6).all(|c| c == mac));
+        }
+    }
+}
+
+// Backs the "Port Scanner" page: a plain TCP connect scan of one host. A
+// connection that completes is open; one that's refused is closed; one that
+// times out is probably filtered by a firewall. It's deliberately limited —
+// one host at a time, at most 4,096 ports, no address sweeps, no raw packets.
+mod portscan {
+    use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    use serde::Serialize;
+
+    const MAX_PORTS: usize = 4096;
+    const WORKERS: usize = 64;
+
+    static CANCEL: AtomicBool = AtomicBool::new(false);
+    static RUNNING: AtomicBool = AtomicBool::new(false);
+
+    #[derive(Debug, Clone, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct OpenPort {
+        pub port: u16,
+        pub service: Option<String>,
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ScanResult {
+        pub host: String,
+        pub address: String,
+        pub open: Vec<OpenPort>,
+        pub scanned: u32,
+        pub closed: u32,
+        pub filtered: u32,
+        pub errors: u32,
+        pub cancelled: bool,
+        pub duration_ms: u64,
+    }
+
+    // "22,80,443,8000-8100" -> sorted, de-duplicated ports.
+    fn parse_ports(spec: &str) -> Result<Vec<u16>, String> {
+        let mut ports: Vec<u16> = Vec::new();
+        for part in spec.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+            let parse = |s: &str| -> Result<u16, String> {
+                match s.trim().parse::<u16>() {
+                    Ok(n) if n >= 1 => Ok(n),
+                    _ => Err(format!("\"{s}\" isn't a port between 1 and 65535.")),
+                }
+            };
+            match part.split_once('-') {
+                Some((a, b)) => {
+                    let (a, b) = (parse(a)?, parse(b)?);
+                    if a > b {
+                        return Err(format!("\"{part}\" is a backwards range."));
+                    }
+                    if ports.len() + usize::from(b - a) + 1 > MAX_PORTS * 2 {
+                        return Err(format!("Too many ports — the limit is {MAX_PORTS}."));
+                    }
+                    ports.extend(a..=b);
+                }
+                None => ports.push(parse(part)?),
+            }
+        }
+        ports.sort_unstable();
+        ports.dedup();
+        if ports.is_empty() {
+            return Err("Enter at least one port.".to_string());
+        }
+        if ports.len() > MAX_PORTS {
+            return Err(format!("Too many ports — the limit is {MAX_PORTS}."));
+        }
+        Ok(ports)
+    }
+
+    fn service_name(port: u16) -> Option<&'static str> {
+        Some(match port {
+            20 | 21 => "FTP",
+            22 => "SSH",
+            23 => "Telnet",
+            25 | 587 => "SMTP",
+            53 => "DNS",
+            67 | 68 => "DHCP",
+            80 => "HTTP",
+            88 => "Kerberos",
+            110 => "POP3",
+            111 => "RPC",
+            123 => "NTP",
+            135 => "MS RPC",
+            137..=139 => "NetBIOS",
+            143 => "IMAP",
+            161 => "SNMP",
+            389 => "LDAP",
+            443 => "HTTPS",
+            445 => "SMB",
+            465 => "SMTPS",
+            514 => "Syslog",
+            636 => "LDAPS",
+            993 => "IMAPS",
+            995 => "POP3S",
+            1433 => "SQL Server",
+            1521 => "Oracle",
+            2049 => "NFS",
+            2375 | 2376 => "Docker API",
+            3000 => "Dev server",
+            3306 => "MySQL",
+            3389 => "RDP",
+            4200 => "Angular dev",
+            5000 => "Dev server",
+            5432 => "PostgreSQL",
+            5672 => "RabbitMQ",
+            5900 => "VNC",
+            5985 | 5986 => "WinRM",
+            6379 => "Redis",
+            8000 | 8080 | 8888 => "HTTP alt",
+            8443 => "HTTPS alt",
+            9000 => "Dev server",
+            9092 => "Kafka",
+            9200 | 9300 => "Elasticsearch",
+            11211 => "Memcached",
+            27017 => "MongoDB",
+            _ => return None,
+        })
+    }
+
+    fn valid_host(host: &str) -> bool {
+        !host.is_empty()
+            && host.len() <= 253
+            && host.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':'))
+    }
+
+    #[derive(Clone, Copy)]
+    enum Outcome {
+        Open,
+        Closed,
+        Filtered,
+        Error,
+    }
+
+    fn probe(addr: IpAddr, port: u16, timeout: Duration) -> Outcome {
+        match TcpStream::connect_timeout(&SocketAddr::new(addr, port), timeout) {
+            Ok(_) => Outcome::Open,
+            Err(err) => match err.kind() {
+                std::io::ErrorKind::ConnectionRefused => Outcome::Closed,
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => Outcome::Filtered,
+                _ => Outcome::Error,
+            },
+        }
+    }
+
+    fn scan_blocking(addr: IpAddr, ports: &[u16], timeout: Duration) -> (Vec<(u16, Outcome)>, bool) {
+        let next = AtomicUsize::new(0);
+        let results: Mutex<Vec<(u16, Outcome)>> = Mutex::new(Vec::with_capacity(ports.len()));
+        let workers = ports.len().clamp(1, WORKERS);
+        std::thread::scope(|scope| {
+            for _ in 0..workers {
+                scope.spawn(|| loop {
+                    if CANCEL.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(&port) = ports.get(i) else { break };
+                    let outcome = probe(addr, port, timeout);
+                    results.lock().unwrap().push((port, outcome));
+                });
+            }
+        });
+        (results.into_inner().unwrap(), CANCEL.load(Ordering::Relaxed))
+    }
+
+    fn resolve(host: &str) -> Result<IpAddr, String> {
+        let addrs: Vec<IpAddr> = (host, 0u16)
+            .to_socket_addrs()
+            .map_err(|_| format!("Couldn't resolve \"{host}\"."))?
+            .map(|a| a.ip())
+            .collect();
+        let ip = addrs
+            .iter()
+            .find(|a| a.is_ipv4())
+            .or_else(|| addrs.first())
+            .copied()
+            .ok_or_else(|| format!("Couldn't resolve \"{host}\"."))?;
+        let blocked = ip.is_unspecified()
+            || ip.is_multicast()
+            || matches!(ip, IpAddr::V4(v4) if v4.is_broadcast());
+        if blocked {
+            return Err("That address can't be scanned.".to_string());
+        }
+        Ok(ip)
+    }
+
+    #[tauri::command]
+    pub async fn scan_ports(host: String, ports: String, timeout_ms: u64) -> Result<ScanResult, String> {
+        let host = host.trim().to_string();
+        if !valid_host(&host) {
+            return Err("Enter a hostname or IP address.".to_string());
+        }
+        let port_list = parse_ports(&ports)?;
+        let timeout = Duration::from_millis(timeout_ms.clamp(100, 5000));
+        if RUNNING.swap(true, Ordering::SeqCst) {
+            return Err("A scan is already running.".to_string());
+        }
+        CANCEL.store(false, Ordering::SeqCst);
+
+        let outcome = tauri::async_runtime::spawn_blocking(move || -> Result<ScanResult, String> {
+            let address = resolve(&host)?;
+            let started = Instant::now();
+            let (results, cancelled) = scan_blocking(address, &port_list, timeout);
+            let mut open: Vec<OpenPort> = Vec::new();
+            let (mut closed, mut filtered, mut errors) = (0, 0, 0);
+            for (port, outcome) in &results {
+                match outcome {
+                    Outcome::Open => open.push(OpenPort { port: *port, service: service_name(*port).map(str::to_string) }),
+                    Outcome::Closed => closed += 1,
+                    Outcome::Filtered => filtered += 1,
+                    Outcome::Error => errors += 1,
+                }
+            }
+            open.sort_by_key(|p| p.port);
+            Ok(ScanResult {
+                host,
+                address: address.to_string(),
+                open,
+                scanned: results.len() as u32,
+                closed,
+                filtered,
+                errors,
+                cancelled,
+                duration_ms: started.elapsed().as_millis() as u64,
+            })
+        })
+        .await
+        .map_err(|err| format!("scan task failed to run: {err}"));
+
+        RUNNING.store(false, Ordering::SeqCst);
+        outcome?
+    }
+
+    #[tauri::command]
+    pub fn cancel_port_scan() {
+        CANCEL.store(true, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::net::TcpListener;
+
+        #[test]
+        fn parses_port_specs() {
+            assert_eq!(parse_ports("80, 22,443,22").unwrap(), vec![22, 80, 443]);
+            assert_eq!(parse_ports("8000-8003,1").unwrap(), vec![1, 8000, 8001, 8002, 8003]);
+            for bad in ["", "0", "65536", "abc", "10-5", "1-99999", "1-5000"] {
+                assert!(parse_ports(bad).is_err(), "{bad}");
+            }
+        }
+
+        #[test]
+        fn knows_common_services() {
+            assert_eq!(service_name(443), Some("HTTPS"));
+            assert_eq!(service_name(5432), Some("PostgreSQL"));
+            assert_eq!(service_name(49999), None);
+        }
+
+        #[test]
+        fn rejects_unscannable_hosts() {
+            assert!(!valid_host("") && !valid_host("a b") && !valid_host("x;y"));
+            assert!(resolve("0.0.0.0").is_err() && resolve("255.255.255.255").is_err());
+        }
+
+        #[test]
+        fn finds_an_open_port_and_a_closed_one() {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let open_port = listener.local_addr().unwrap().port();
+            let closed_port = {
+                let l = TcpListener::bind("127.0.0.1:0").unwrap();
+                l.local_addr().unwrap().port()
+            };
+            CANCEL.store(false, Ordering::SeqCst);
+            // Windows can take a couple of seconds to refuse a loopback
+            // connection, so allow for it.
+            let (results, cancelled) =
+                scan_blocking("127.0.0.1".parse().unwrap(), &[open_port, closed_port], Duration::from_millis(4000));
+            assert!(!cancelled);
+            let outcome = |p: u16| results.iter().find(|(port, _)| *port == p).map(|(_, o)| *o);
+            assert!(matches!(outcome(open_port), Some(Outcome::Open)));
+            assert!(matches!(outcome(closed_port), Some(Outcome::Closed)));
+        }
+    }
+}
+
+// Backs the "Startup" page: what launches when you sign in, from the
+// registry Run keys and the Startup folders, with the same on/off switch
+// Task Manager's Startup tab uses (the `StartupApproved` flags). Reading is
+// unelevated; switching an entry that belongs to all users needs admin.
+mod startup {
+    use serde::{Deserialize, Serialize};
+
+    use crate::{run_elevated, run_powershell};
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct StartupItem {
+        pub source: String,
+        pub source_label: String,
+        pub machine_wide: bool,
+        pub name: String,
+        pub command: String,
+        pub path: Option<String>,
+        pub file_exists: bool,
+        pub company: Option<String>,
+        pub description: Option<String>,
+        pub enabled: bool,
+    }
+
+    const LIST_SCRIPT: &str = include_str!("../scripts/startup_list.ps1");
+
+    #[tauri::command]
+    pub async fn get_startup_items() -> Result<Vec<StartupItem>, String> {
+        let trimmed = run_powershell(LIST_SCRIPT, &[]).await?;
+        if trimmed.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut items: Vec<StartupItem> = serde_json::from_str(&trimmed)
+            .map_err(|err| format!("failed to parse powershell output: {err}"))?;
+        items.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        Ok(items)
+    }
+
+    const SOURCES: [&str; 5] = ["hkcu-run", "hklm-run", "hklm-run32", "startup-user", "startup-common"];
+
+    fn is_machine_wide(source: &str) -> bool {
+        matches!(source, "hklm-run" | "hklm-run32" | "startup-common")
+    }
+
+    // Writes the StartupApproved flag for one entry: 02 00 00 00 + zeros
+    // when enabled; 03 00 00 00 + the time it was disabled when not — the
+    // exact layout Task Manager uses.
+    const TOGGLE_CORE: &str = r#"
+$approvedBase = 'Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved'
+$runBase = 'Software\Microsoft\Windows\CurrentVersion\Run'
+$defs = @{
+    'hkcu-run'       = @{ hive = 'CurrentUser';  run = $runBase; approved = "$approvedBase\Run";           folder = $null }
+    'hklm-run'       = @{ hive = 'LocalMachine'; run = $runBase; approved = "$approvedBase\Run";           folder = $null }
+    'hklm-run32'     = @{ hive = 'LocalMachine'; run = 'Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run'; approved = "$approvedBase\Run32"; folder = $null }
+    'startup-user'   = @{ hive = 'CurrentUser';  run = $null; approved = "$approvedBase\StartupFolder"; folder = [Environment]::GetFolderPath('Startup') }
+    'startup-common' = @{ hive = 'LocalMachine'; run = $null; approved = "$approvedBase\StartupFolder"; folder = [Environment]::GetFolderPath('CommonStartup') }
+}
+$def = $defs[[string]$req.Source]
+if (-not $def) { throw 'Unknown startup location.' }
+$hive = if ($def.hive -eq 'LocalMachine') { [Microsoft.Win32.Registry]::LocalMachine } else { [Microsoft.Win32.Registry]::CurrentUser }
+$name = [string]$req.Name
+
+# The entry has to exist where it claims to.
+$actual = $null
+if ($def.run) {
+    $runKey = $hive.OpenSubKey($def.run)
+    if ($runKey) { try { foreach ($n in $runKey.GetValueNames()) { if ($n -ieq $name) { $actual = $n; break } } } finally { $runKey.Close() } }
+} else {
+    if ($name -match '[\\/:*?"<>|]') { throw 'That startup entry name isn''t valid.' }
+    if ($def.folder -and (Test-Path -LiteralPath (Join-Path $def.folder $name))) { $actual = $name }
+}
+if (-not $actual) { throw 'That startup entry no longer exists — refresh and try again.' }
+
+$bytes = New-Object byte[] 12
+if ($req.Enabled) { $bytes[0] = 2 } else {
+    $bytes[0] = 3
+    [BitConverter]::GetBytes([DateTime]::UtcNow.ToFileTimeUtc()).CopyTo($bytes, 4)
+}
+$key = $hive.CreateSubKey($def.approved)
+try { $key.SetValue($actual, $bytes, [Microsoft.Win32.RegistryValueKind]::Binary) } finally { $key.Close() }
+return @{ Success = $true }
+"#;
+
+    fn user_script() -> String {
+        format!(
+            r#"
+$ErrorActionPreference = 'Stop'
+try {{
+    $req = ConvertFrom-Json -InputObject $env:ZAGZIG_STARTUP_REQUEST
+    $result = & {{ {TOGGLE_CORE} }}
+    $result | ConvertTo-Json -Compress
+}} catch {{
+    $ex = $_.Exception
+    while ($ex.InnerException) {{ $ex = $ex.InnerException }}
+    @{{ Success = $false; Error = $ex.Message }} | ConvertTo-Json -Compress
+}}
+"#
+        )
+    }
+
+    fn machine_worker() -> String {
+        format!(
+            r#"
+param(
+    [Parameter(Mandatory)] [string]$InputPath,
+    [Parameter(Mandatory)] [string]$OutputPath
+)
+$ErrorActionPreference = 'Stop'
+try {{
+    $req = Get-Content -Raw -LiteralPath $InputPath | ConvertFrom-Json
+    $result = & {{ {TOGGLE_CORE} }}
+    $result | ConvertTo-Json -Compress | Set-Content -LiteralPath $OutputPath
+}} catch {{
+    $ex = $_.Exception
+    while ($ex.InnerException) {{ $ex = $ex.InnerException }}
+    @{{ Success = $false; Error = $ex.Message }} | ConvertTo-Json -Compress | Set-Content -LiteralPath $OutputPath
+}}
+"#
+        )
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct Reply {
+        success: bool,
+        #[serde(default)]
+        error: Option<String>,
+    }
+
+    #[tauri::command]
+    pub async fn set_startup_item_enabled(source: String, name: String, enabled: bool) -> Result<(), String> {
+        if !SOURCES.contains(&source.as_str()) {
+            return Err("Unknown startup location.".to_string());
+        }
+        if name.is_empty() || name.chars().count() > 260 || name.chars().any(char::is_control) {
+            return Err("That doesn't look like a valid startup entry.".to_string());
+        }
+        let request = serde_json::json!({ "Source": source, "Name": name, "Enabled": enabled }).to_string();
+        let raw = if is_machine_wide(&source) {
+            run_elevated(&machine_worker(), &request).await?
+        } else {
+            run_powershell(&user_script(), &[("ZAGZIG_STARTUP_REQUEST", request.as_str())]).await?
+        };
+        let reply: Reply =
+            serde_json::from_str(raw.trim()).map_err(|err| format!("failed to parse powershell output: {err}"))?;
+        if reply.success {
+            Ok(())
+        } else {
+            Err(reply.error.unwrap_or_else(|| "Unknown error.".to_string()))
+        }
+    }
+
+    // Opens Explorer with the file selected.
+    #[tauri::command]
+    pub async fn reveal_in_explorer(path: String) -> Result<(), String> {
+        use std::os::windows::process::CommandExt;
+        if path.is_empty() || path.contains('"') || path.chars().any(char::is_control) {
+            return Err("That path can't be shown.".to_string());
+        }
+        if !std::path::Path::new(&path).exists() {
+            return Err("That file doesn't exist.".to_string());
+        }
+        std::process::Command::new("explorer.exe")
+            .raw_arg(format!("/select,\"{path}\""))
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| format!("couldn't open Explorer: {err}"))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn knows_which_sources_need_admin() {
+            assert!(is_machine_wide("hklm-run") && is_machine_wide("startup-common"));
+            assert!(!is_machine_wide("hkcu-run") && !is_machine_wide("startup-user"));
+        }
+
+        #[test]
+        fn scripts_embed_the_core() {
+            assert!(user_script().contains("StartupApproved") && user_script().contains("ZAGZIG_STARTUP_REQUEST"));
+            assert!(machine_worker().contains("InputPath") && machine_worker().contains("CreateSubKey"));
+        }
+
+        #[test]
+        fn parses_items_and_replies() {
+            let json = r#"[{"source":"hkcu-run","sourceLabel":"HKCU Run","machineWide":false,"name":"X","command":"c","path":null,"fileExists":false,"company":null,"description":null,"enabled":true}]"#;
+            let items: Vec<StartupItem> = serde_json::from_str(json).unwrap();
+            assert!(items[0].enabled);
+            let r: Reply = serde_json::from_str(r#"{"Success":false,"Error":"x"}"#).unwrap();
+            assert!(!r.success);
+        }
+    }
+}
+
+// Backs the "TLS Inspector" page: connects to host:port, does the TLS
+// handshake and reports the certificate chain, expiry, names and negotiated
+// protocol — and, using Windows' own trust store, whether Windows would
+// accept it (which is what decides whether most Windows tools do). It uses
+// .NET's TLS stack through PowerShell, so there's no extra dependency. The
+// connection is only for the handshake; nothing is sent after it, and
+// invalid certificates are still read rather than refused.
+mod tls {
+    use serde::{Deserialize, Serialize};
+
+    use crate::{run_powershell, string_or_vec, value_or_vec};
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct TlsCertificate {
+        pub subject: String,
+        pub issuer: String,
+        pub serial: String,
+        pub thumbprint: String,
+        pub not_before: String,
+        pub not_after: String,
+        pub days_remaining: i32,
+        pub signature: Option<String>,
+        pub public_key: Option<String>,
+        pub self_signed: bool,
+        #[serde(default, deserialize_with = "string_or_vec")]
+        pub san: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct TlsChainElement {
+        pub cert: TlsCertificate,
+        #[serde(default, deserialize_with = "string_or_vec")]
+        pub problems: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct TlsInspection {
+        pub host: String,
+        pub port: u16,
+        pub server_name: String,
+        pub connected: bool,
+        pub handshake: bool,
+        pub protocol: Option<String>,
+        pub cipher: Option<String>,
+        pub cipher_strength: Option<u32>,
+        pub hash: Option<String>,
+        pub key_exchange: Option<String>,
+        pub policy_errors: Option<String>,
+        pub trusted: bool,
+        pub name_matches: bool,
+        pub certificate: Option<TlsCertificate>,
+        #[serde(default, deserialize_with = "value_or_vec")]
+        pub chain: Vec<TlsChainElement>,
+        pub error: Option<String>,
+        pub duration_ms: u64,
+    }
+
+    const INSPECT_SCRIPT: &str = include_str!("../scripts/tls_inspect.ps1");
+
+    fn valid_name(name: &str) -> bool {
+        !name.is_empty()
+            && name.len() <= 253
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':'))
+    }
+
+    #[tauri::command]
+    pub async fn inspect_tls(
+        host: String,
+        port: u16,
+        server_name: Option<String>,
+        timeout_ms: u64,
+    ) -> Result<TlsInspection, String> {
+        let host = host.trim().to_string();
+        if !valid_name(&host) {
+            return Err("Enter a hostname or IP address.".to_string());
+        }
+        if port == 0 {
+            return Err("The port must be between 1 and 65535.".to_string());
+        }
+        let sni = server_name.as_deref().map(str::trim).unwrap_or("").to_string();
+        if !sni.is_empty() && !valid_name(&sni) {
+            return Err("The server name isn't valid.".to_string());
+        }
+        let port_text = port.to_string();
+        let timeout_text = timeout_ms.clamp(1000, 30_000).to_string();
+
+        let trimmed = run_powershell(
+            INSPECT_SCRIPT,
+            &[
+                ("ZAGZIG_TLS_HOST", host.as_str()),
+                ("ZAGZIG_TLS_PORT", port_text.as_str()),
+                ("ZAGZIG_TLS_SNI", sni.as_str()),
+                ("ZAGZIG_TLS_TIMEOUT_MS", timeout_text.as_str()),
+            ],
+        )
+        .await?;
+        serde_json::from_str(&trimmed).map_err(|err| format!("failed to parse powershell output: {err}"))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn validates_names() {
+            assert!(valid_name("example.com") && valid_name("10.0.0.5") && valid_name("[::1]".trim_matches(['[', ']'])));
+            assert!(!valid_name("") && !valid_name("a b") && !valid_name("x;y") && !valid_name("a/b"));
+        }
+
+        #[test]
+        fn parses_a_failed_connection_and_a_collapsed_chain() {
+            let failed = r#"{"host":"h","port":443,"serverName":"h","connected":false,"handshake":false,"protocol":null,"cipher":null,"cipherStrength":null,"hash":null,"keyExchange":null,"policyErrors":null,"trusted":false,"nameMatches":false,"certificate":null,"chain":[],"error":"refused","durationMs":5}"#;
+            let r: TlsInspection = serde_json::from_str(failed).unwrap();
+            assert!(!r.connected && r.error.as_deref() == Some("refused") && r.chain.is_empty());
+
+            let cert = r#"{"subject":"CN=a","issuer":"CN=a","serial":"01","thumbprint":"AB","notBefore":"2026-01-01T00:00:00Z","notAfter":"2027-01-01T00:00:00Z","daysRemaining":90,"signature":"sha256RSA","publicKey":"RSA 2048-bit","selfSigned":true,"san":"DNS Name=a"}"#;
+            let one = format!(r#"{{"host":"h","port":443,"serverName":"h","connected":true,"handshake":true,"protocol":"Tls12","cipher":"Aes128","cipherStrength":128,"hash":"Sha256","keyExchange":"ECDH","policyErrors":"None","trusted":true,"nameMatches":true,"certificate":{cert},"chain":{{"cert":{cert},"problems":"x"}},"error":null,"durationMs":9}}"#);
+            let r: TlsInspection = serde_json::from_str(&one).unwrap();
+            assert_eq!(r.chain.len(), 1);
+            assert_eq!(r.chain[0].problems, vec!["x"]);
+            assert_eq!(r.certificate.unwrap().san, vec!["DNS Name=a"]);
+        }
+    }
+}
+
 // Backs the "Proxy Settings" feature: the WinHTTP proxy (`netsh winhttp`) is
 // a separate, machine-wide setting from the browser/"Internet Options" proxy
 // that Settings exposes — plenty of things (Windows Update's underlying
@@ -6353,5 +7302,65 @@ mod dns_cache {
     pub async fn flush_dns_cache() -> Result<(), String> {
         run_powershell("Clear-DnsClientCache", &[]).await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod encoding_tests {
+    use super::*;
+
+    // `José 日本語 — ok`, built from code points so this file's own encoding
+    // can't affect the test.
+    const SAMPLE: &str = "Jos\u{e9} \u{65e5}\u{672c}\u{8a9e} \u{2014} ok";
+
+    #[test]
+    fn non_ascii_output_survives_the_trip_from_powershell() {
+        let script = "[string]::Join('', [char[]](74,111,115,233,32,26085,26412,35486,32,8212,32,111,107))";
+        let out = tauri::async_runtime::block_on(run_powershell(script, &[])).unwrap();
+        assert_eq!(out, SAMPLE);
+    }
+
+    #[test]
+    fn non_ascii_environment_values_round_trip() {
+        let out = tauri::async_runtime::block_on(run_powershell("$env:ZAGZIG_ENC_TEST", &[("ZAGZIG_ENC_TEST", SAMPLE)])).unwrap();
+        assert_eq!(out, SAMPLE);
+    }
+
+    #[test]
+    fn elevation_launcher_keeps_input_and_output_utf8() {
+        // The elevated pipeline minus the UAC prompt: files written the way
+        // run_elevated writes them, run through the same launcher, read back
+        // the way the outer script reads them.
+        let worker = "param([string]$InputPath,[string]$OutputPath)\n\
+            $req = Get-Content -Raw -LiteralPath $InputPath | ConvertFrom-Json\n\
+            @{ Echo = $req.Value; Literal = 'Jos\u{e9} \u{2014}' } | ConvertTo-Json -Compress | Set-Content -LiteralPath $OutputPath";
+        let input = serde_json::json!({ "Value": SAMPLE }).to_string();
+
+        let launcher_path = unique_temp_path("t-launcher.ps1");
+        let worker_path = unique_temp_path("t-worker.ps1");
+        let input_path = unique_temp_path("t-input.txt");
+        let output_path = unique_temp_path("t-output.json");
+        let with_bom = |t: &str| format!("\u{feff}{t}");
+        std::fs::write(&launcher_path, with_bom(ELEVATE_LAUNCHER_SCRIPT)).unwrap();
+        std::fs::write(&worker_path, with_bom(worker)).unwrap();
+        std::fs::write(&input_path, with_bom(&input)).unwrap();
+
+        let run = r#"& powershell.exe -NoProfile -NonInteractive -File $env:L -Worker $env:W -InputPath $env:I -OutputPath $env:O | Out-Null
+Get-Content -Raw -Encoding UTF8 -LiteralPath $env:O"#;
+        let out = tauri::async_runtime::block_on(run_powershell(
+            run,
+            &[
+                ("L", launcher_path.to_str().unwrap()),
+                ("W", worker_path.to_str().unwrap()),
+                ("I", input_path.to_str().unwrap()),
+                ("O", output_path.to_str().unwrap()),
+            ],
+        ));
+        for p in [&launcher_path, &worker_path, &input_path, &output_path] {
+            let _ = std::fs::remove_file(p);
+        }
+        let parsed: serde_json::Value = serde_json::from_str(&out.unwrap()).unwrap();
+        assert_eq!(parsed["Echo"], SAMPLE, "the request survived the trip in and out");
+        assert_eq!(parsed["Literal"], "Jos\u{e9} \u{2014}", "a literal inside the worker script survived");
     }
 }

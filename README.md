@@ -25,6 +25,8 @@ Looking for how to use the app rather than how it's built? See the
 | Network Routes | View and manage the Windows IP routing table (`route print`/`add`/`delete`, with a GUI) |
 | Ports | See which application uses which TCP/UDP port, with the owning process's details; spot reserved port ranges (Hyper-V/WSL/Docker) and stop the process or service holding a port |
 | Port Proxy | Add, view and remove `netsh interface portproxy` forwarding rules — the usual WSL/Docker workaround, with no built-in GUI |
+| Port Scanner | A simple TCP connect scan of one host — which ports accept a connection, and the service they usually carry |
+| Wake-on-LAN | Turn on a PC that's off or asleep with a magic packet; saved devices, no software needed on the target |
 | Network Adapters | Each adapter's addresses, gateway, DNS, DHCP, link speed and traffic counters, with enable/disable and DHCP renew |
 | DNS Servers | Set DNS servers per network adapter — as many as you need, not just preferred/alternate |
 | DNS Lookup | A `dig`-style query tool: pick a record type and a specific DNS server to ask |
@@ -41,6 +43,8 @@ Looking for how to use the app rather than how it's built? See the
 | Environment Variables | Edit user and system environment variables, with a list editor for PATH (missing/duplicate folders flagged) and undo for every change |
 | Event Log | Recent System/Application events filtered to network & DNS problems and WSL/Hyper-V/Docker |
 | Proxy Settings | The WinHTTP proxy (`netsh winhttp`) — the machine-wide proxy Windows Update and many background services and CLI tools honor, separate from the one in Settings > Network |
+| Startup | See and switch off what starts at sign-in (registry Run keys and Startup folders) — the same switch Task Manager uses |
+| TLS Inspector | Connect to a host:port and show its certificate, chain, expiry and whether Windows trusts it |
 | Code Signing | Sign and verify files with Authenticode via `signtool.exe`, auto-located from the Windows SDK |
 | Certificate Store | Browse, view details of, export, or delete certificates without `certmgr.msc` |
 

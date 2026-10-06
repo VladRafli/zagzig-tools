@@ -80,7 +80,7 @@ changing DNS servers, editing or reordering the hosts file, changing the WinHTTP
 removing a port proxy rule, enabling, disabling or renewing a network adapter, stopping a Windows
 service, turning a firewall rule on or off, clearing ARP/neighbor entries, starting, stopping or
 reconfiguring a service, showing a saved Wi-Fi password, changing a System environment variable,
-force restarting WSL, or deleting a certificate from the machine-wide (`Local Machine`) store.
+turning off or on a startup entry that applies to all users, force restarting WSL, or deleting a certificate from the machine-wide (`Local Machine`) store.
 Reading any of these pages — and the Ports, Port Proxy, Network Adapters, DNS Lookup, Firewall,
 Neighbors, VPN, Wi-Fi (profile list), Services, Event Log and Environment Variables pages — plus
 the SSH Config page and the rest of the WSL page, don't need administrator rights. Connecting or
@@ -237,6 +237,54 @@ has no GUI for them. Viewing rules needs no administrator rights; adding or remo
 
 A rule only forwards traffic — Windows Firewall still has to allow inbound connections on the
 listen port.
+
+### Port Scanner
+
+*Network → Port Scanner*
+
+Checks which TCP ports on one host accept a connection. Only scan hosts you own or have permission
+to test. It needs no administrator rights.
+
+- **Host and ports**: a hostname or IP address, plus a preset — **Common ports**, **Web servers**,
+  **Databases**, **Dev servers**, **Well-known (1–1024)** — or **Custom…** with single ports and
+  ranges separated by commas (`22,80,443,8000-8100`). One host at a time, up to 4,096 ports.
+- **Timeout per port**: how long to wait for each answer (300 ms to 4 s). A longer timeout is
+  slower but surer on a slow or distant network.
+- **Results**: the open ports with the service they usually carry (HTTPS, SSH, PostgreSQL, ...),
+  plus how many ports were closed, filtered or failed. **Cancel** stops a scan and keeps what was
+  found so far.
+
+It's a plain connect scan: a port that answers is **open**, one that refuses the connection is
+**closed**, and one that never answers is probably **filtered** by a firewall. Windows can take a
+couple of seconds to refuse a connection to the PC's own address, so when scanning this PC a closed
+port may be counted as filtered — open ports are reported correctly either way. It can't scan UDP
+or sweep a range of hosts.
+
+### Wake-on-LAN
+
+*Network → Wake-on-LAN*
+
+Turns on a PC that's off or asleep by sending it a "magic packet" over the network. **The other PC
+doesn't need this app or any software** — its network card recognises the packet while the PC is
+off. Needs no administrator rights.
+
+- **Devices**: add a device with a name and its MAC address (`AA-BB-CC-DD-EE-FF`; colons, dashes
+  and dotted forms are all accepted). **Fill in from a device this PC has seen** copies a MAC and
+  address from the Neighbors list. Devices are saved and can be edited or deleted.
+- **Wake**: sends the packet — three copies, from every physical adapter that's up, so it leaves
+  through your real network instead of a WSL or VPN adapter. **Send from** lets you pick one adapter
+  instead. A device can also have its own UDP port (default 9) and a broadcast address (default
+  `255.255.255.255`; use your subnet's, such as `192.168.1.255`, if that doesn't work).
+- **Did it work?** A magic packet gets no reply. If you give a device an **address to ping**, the
+  app pings it for up to 90 seconds afterwards and shows "Online after N seconds" when it starts
+  answering. Without one, it can only tell you the packet was sent.
+
+Waking only works if Wake-on-LAN is enabled in the target's BIOS/UEFI (often called "Wake on
+LAN" or "Power on by PCI-E device") and in its network card's driver settings in Device Manager
+(Power Management: allow the device to wake the computer / only a magic packet). On Windows, turning
+off Fast Startup helps when waking from a full shutdown. The PC must still be plugged into power and
+a network cable, and be on the same network as this PC — the packet is a broadcast, which doesn't
+cross routers. PCs on Wi-Fi rarely support it.
 
 ### Network Adapters
 
@@ -547,6 +595,28 @@ Changes are written to the registry and Windows is told the environment changed,
 and any program you start afterwards see them. **Programs that were already running — open
 terminals, editors, IDEs — keep their old environment** until you restart them.
 
+### Startup
+
+*System → Startup*
+
+What starts when you sign in to Windows: the registry Run keys (your own, all users', and the
+32-bit all-users one) and the two Startup folders (yours and the all-users one). For each entry you
+see the program's description and company (from the file's properties), its command line, and where
+it comes from.
+
+- **Switch**: turns an entry on or off using the same flag Task Manager's Startup tab uses, so the
+  two always agree. Turning something off doesn't delete it, and turning it back on restores it
+  exactly. Entries that apply to all users need administrator approval to change; your own don't.
+- **File not found**: flagged in red when the program an entry points to no longer exists — usually
+  a leftover from an uninstalled program. (Programs under the Store-app folder can't be checked, so
+  they're never flagged.)
+- **Show the file in Explorer** opens the folder with the program selected.
+- Search matches name, command, company and description; the filter shows all, only enabled, or
+  only disabled entries.
+
+Scheduled tasks and Windows services that start at boot aren't listed here — use the Services page
+for services.
+
 ### Code Signing
 
 *Dev Tools → Code Signing*
@@ -561,6 +631,39 @@ by administrator rights — it's gated only on whether `signtool.exe` was found.
   an optional timestamp server, and an optional description. Output (signtool's own console
   output) is shown inline.
 - **Verify a signature**: pick a file and check whether it's signed and trusted.
+
+### TLS Inspector
+
+*Dev Tools → TLS Inspector*
+
+Connects to a server, does the TLS handshake, and shows what it presents — handy when a tool, a
+browser or a script refuses to talk to a local or internal HTTPS service and you need to know why. It
+needs no administrator rights, and nothing is sent after the handshake.
+
+- **Host, port and server name**: the port defaults to 443. **Server name** sets the name sent
+  during the handshake (SNI); leave it empty to use the host. Fill it in when connecting by IP
+  address, or when a server holds several certificates and picks one by name.
+- **Verdicts** at the top: whether **Windows trusts** the certificate, whether its **names cover**
+  the name you connected with, and how long until it **expires** (or that it already has). An
+  outdated protocol (TLS 1.1 or older) is flagged too.
+- **Connection**: the TLS version, cipher, key exchange and hash that were negotiated, and how long
+  the handshake took.
+- **Server certificate**: subject, issuer, validity dates, key type and size, signature algorithm,
+  serial number, thumbprint, and every name it covers.
+- **Certificate chain**: each certificate from the server's up to the root, with any problem Windows
+  found at that step (not trusted, expired, ...).
+
+"Trusted" means *Windows* trusts it, using the Windows certificate store — which is what most
+Windows tools, .NET apps and PowerShell go by. Browsers such as Firefox and tools that bring their own
+list of authorities (Node.js, Python, Java and others) can decide differently. A self-signed or
+private-CA certificate shows as not trusted until its CA is added to **Trusted Root Certification
+Authorities** (this app can browse and remove certificates in the Certificate Store page, but not
+import them — use `certmgr.msc` or `Import-Certificate` for that). If a server fails to send its intermediate
+certificates, Windows may not be able to complete the chain, which is a common cause of "works in the
+browser, fails in my tool".
+
+Certificates are read even when they're invalid — the point is to inspect them — so don't treat a
+successful connection here as a sign the server is safe.
 
 ### Certificate Store
 
