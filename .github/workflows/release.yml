@@ -47,25 +47,15 @@ jobs:
           releaseName: "zagzig-tools ${{ github.ref_name }}"
           # NOTE: this is a static, per-release description — update it
           # before tagging each release (it's plain text, not generated from
-          # commits/changelog). What's below describes v0.12.0 specifically.
+          # commits/changelog). What's below describes v0.13.0 specifically.
           releaseBody: |
-            ## What's new in v0.12.0
+            ## What's new in v0.13.0
 
-            - **Diagnostic Report** (new page under System): one Markdown report of the PC's
-              network setup for a support ticket. Pick the sections, then copy or save it.
-              Computer and user names and MAC addresses are hidden by default, with an optional
-              IPv4 mask.
-            - **Certificate import**: add a certificate from a DER, PEM (including bundles), P7B
-              or password-protected PFX file. You review what's in the file first and choose the
-              store.
-            - **Firewall rules**: create allow/block rules for a port, also straight from a row
-              on the Ports page. Only rules made by this app can be deleted from it.
-            - **Hosts file backups**: a copy is saved before every change; compare with the
-              current file and restore any of the newest 30.
-            - **Saved hosts**: keep hosts in a list shared by Connection Test, Port Scanner and
-              TLS Inspector.
-            - **Fixed**: PEM bundles imported only their first certificate, and a harmless Event
-              Log message was shown as an error.
+            - **New Dashboard**: a small card for every feature, grouped like the sidebar. The
+              sidebar stays hidden on the Dashboard and opens when you pick a feature.
+            - **Back to Dashboard**: a button in the top bar of every feature page.
+            - **User manual**: rewritten to be shorter and easier to read, and brought up to date
+              with every feature.
 
             See the assets below to download this release.
 
