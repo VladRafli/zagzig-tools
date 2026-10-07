@@ -58,6 +58,7 @@ const id: typeof en = {
   },
   nav: {
     overview: "Ringkasan",
+    backToDashboard: "Dasbor",
     network: "Jaringan",
     system: "Sistem",
     firewall: "Firewall",

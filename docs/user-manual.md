@@ -1,12 +1,11 @@
 # zagzig-tools User Manual
 
-*A Windows network/admin toolkit, and its cross-platform terminal companion.*
+*A Windows network and admin toolkit, with a terminal companion.*
 
 This manual covers both apps in the project:
 
-- **zagzig-tools** — the desktop app (Windows only), with a full sidebar of network and admin
-  tools.
-- **zagzig-tui** — a terminal app covering a subset of the same diagnostics (Windows and Linux).
+- **zagzig-tools** is the desktop app (Windows only), with network and admin tools.
+- **zagzig-tui** is a terminal app with a subset of the diagnostics (Windows and Linux).
 
 ---
 
@@ -24,123 +23,106 @@ This manual covers both apps in the project:
 
 ## 1. Installing
 
-Both apps are published as GitHub Releases at
-`github.com/VladRafli/zagzig-tools/releases`.
+Both apps are published as GitHub Releases at `github.com/VladRafli/zagzig-tools/releases`.
 
 ### Desktop app (Windows)
 
 Download and run one of:
 
-- `zagzig-tools_<version>_x64_en-US.msi` — standard Windows Installer package
-- `zagzig-tools_<version>_x64-setup.exe` — NSIS installer
+- `zagzig-tools_<version>_x64_en-US.msi`, the standard Windows Installer package
+- `zagzig-tools_<version>_x64-setup.exe`, the NSIS installer
 
-Either one installs the app and adds a Start Menu shortcut. No administrator rights are needed to
-install or to run the app day-to-day — see [Administrator rights](#administrator-rights) below for
-when they're actually needed.
+Either one adds a Start Menu shortcut. Installing and daily use need no administrator rights. See
+[Administrator rights](#administrator-rights) for when they are needed.
 
 ### Terminal UI (Windows or Linux)
 
-Download and unzip whichever matches your machine:
+Download and unzip the one that matches your machine:
 
-- `zagzig-tui-x86_64-pc-windows-msvc.zip` → `zagzig-tui.exe`
-- `zagzig-tui-x86_64-unknown-linux-gnu.zip` → `zagzig-tui`
+- `zagzig-tui-x86_64-pc-windows-msvc.zip` gives `zagzig-tui.exe`
+- `zagzig-tui-x86_64-unknown-linux-gnu.zip` gives `zagzig-tui`
 
-There's no installer — extract the archive and run the binary directly from a terminal
-(`.\zagzig-tui.exe` on Windows, `./zagzig-tui` on Linux, after `chmod +x zagzig-tui` if needed).
+There is no installer. Run the binary from a terminal (`.\zagzig-tui.exe` on Windows, `./zagzig-tui`
+on Linux, after `chmod +x zagzig-tui` if needed).
 
 ### Verifying your download
 
-Every release also includes `checksums.txt` — SHA-256 hashes for every other file in the release.
-To check a download matches:
+Each release includes `checksums.txt` with the SHA-256 of every other file:
 
-- **Windows (PowerShell):** `Get-FileHash -Algorithm SHA256 <file>` and compare the hash by eye
-- **Linux/macOS/WSL:** `sha256sum -c checksums.txt`, run from the folder you downloaded into
+- **Windows (PowerShell):** `Get-FileHash -Algorithm SHA256 <file>`, then compare the hash by eye
+- **Linux, macOS, WSL:** `sha256sum -c checksums.txt`, run from the download folder
 
-This is a plain integrity check (did the download complete correctly), not an authenticity
-signature — see [Staying up to date](#5-staying-up-to-date) for how each app actually verifies
-updates it installs automatically.
+This only checks that the download is complete. It isn't a signature. See
+[Staying up to date](#5-staying-up-to-date) for how updates are verified.
 
 ---
 
 ## 2. Getting started with the desktop app
 
-On first launch you'll see a sidebar on the left (grouped into **Overview**, **Network**, **System**,
-and **Dev Tools**) and the selected page's content on the right. A header bar at the top shows your
-administrator status; the sidebar footer has the update indicator (when relevant), theme switcher,
-and language switcher.
+The app opens on the **Dashboard**, a grid of cards with one per feature, grouped as **Overview**,
+**Network**, **System** and **Dev Tools**. Click a card to open that page. The sidebar is hidden on
+the Dashboard and opens when you pick a feature. The **Dashboard** button in the top bar goes back,
+and the button at its left toggles the sidebar (`Ctrl+B` too). The top bar also shows your
+administrator status. The sidebar footer has the update control, theme switcher and language
+switcher.
 
-This manual is built into the app: open **User Manual** under **Overview** in the sidebar to read it
-there, with a searchable table of contents. It's the same text as this file, and it's in English
-only.
+This manual is built into the app under **User Manual** (searchable, English only).
 
 ### Administrator rights
 
-Some actions need administrator approval — removing an NRPT rule, adding or removing a route,
-changing DNS servers, editing, reordering or restoring a backup of the hosts file, changing the
-WinHTTP proxy, adding or removing a port proxy rule, enabling, disabling or renewing a network
-adapter, stopping a Windows service, creating, deleting or switching a firewall rule, clearing
-ARP/neighbor entries, starting, stopping or reconfiguring a service, showing a saved Wi-Fi
-password, changing a System environment variable, switching a startup entry that applies to all
-users, force restarting WSL, importing a certificate into, or deleting one from, a machine-wide
-(`Local Machine`) store. Reading any of these pages — including Ports, Port Proxy, Network
-Adapters, DNS Lookup, Firewall, Neighbors, VPN, Wi-Fi (profile list), Services, Event Log,
-Environment Variables, Startup, Diagnostic Report and the certificate and TLS pages — plus the SSH
-Config page and the rest of the WSL page, don't need administrator rights. Connecting or
-disconnecting a VPN, importing a certificate into your own account's stores, and editing your own
-(User) environment variables don't either, and stopping a process only asks for approval if Windows
-refuses to let you stop it as yourself.
+These actions need administrator approval:
 
-The app itself **never needs to run elevated**. Instead, each privileged action triggers exactly
-one UAC prompt for that specific change — you don't have to relaunch the whole app as
-Administrator to use any single feature. Locked controls show a lock icon and a tooltip explaining
-why; hovering explains what's needed.
+- **Network:** removing an NRPT rule, adding or removing a route, changing DNS servers or the WinHTTP
+  proxy, adding or removing a port proxy rule, enabling, disabling or renewing an adapter, clearing
+  ARP entries, showing a saved Wi-Fi password
+- **Files:** editing, reordering or restoring the hosts file
+- **Firewall:** creating, deleting or switching a rule
+- **System:** starting, stopping or reconfiguring a service, changing a System environment variable,
+  switching an all-users startup entry, force restarting WSL
+- **Certificates:** importing into or deleting from a machine-wide (`Local Machine`) store
 
-If your Windows account isn't in the local Administrators group at all (a standard user account),
-those controls simply stay locked — there's no unelevated attempt or ambiguous error, and you'll
-see a badge at the top of the window reading "Standard user" instead of "Administrator". The
-Dashboard also shows a banner in this case: **"Running as a standard user"**, with a "Restart as
-administrator" button, if you *do* have an account capable of elevating but are running the app
-without having chosen "Run as Administrator".
+Everything else works without them. That includes reading any page, the SSH Config page, most of
+WSL, connecting a VPN, importing a certificate into your own account, editing your own (User)
+environment variables, and flushing the DNS cache. Stopping a process asks for approval only if
+Windows refuses to let you do it yourself.
+
+The app itself **never runs elevated**. Each privileged action shows one UAC prompt for that change.
+Locked controls show a lock icon, and a tooltip says why.
+
+If your account isn't an administrator, those controls stay locked and the top bar says "Standard
+user". If your account could elevate but the app isn't running as administrator, the Dashboard shows
+a **"Running as a standard user"** banner with a **Restart as administrator** button.
 
 ### Theme and language
 
-The sidebar footer has a theme selector (System / Light / Dark) and a language selector. The app
-ships with English and Indonesian, and any other language can be added without a new release — see
-below.
+The sidebar footer has a theme selector (System, Light, Dark) and a language selector. English and
+Indonesian are built in. Other languages can be added without a new release.
 
 #### Adding another language
 
-Open **Languages** under **Overview** in the sidebar. A language is a single JSON file with the same
-structure as the English one (the user manual itself stays English-only).
+Open **Languages** under **Overview**. A language is one JSON file with the same structure as the
+English one.
 
-1. Choose a starting point under **Add your own language** — **Start from English**, or **Start from
-   Indonesian** if that's closer to your language — and click **Export template…** to save it.
-2. Open the file in a text editor. In the `$meta` section at the top, set `code` (a short language
-   code such as `fr` or `pt-br`) and `name` (how the language is shown, written in that language).
-   Add `"dir": "rtl"` for a right-to-left language.
-3. Translate the text values. Don't change the keys, and keep `{{placeholders}}` and numbered tags
-   such as `<0>…</0>` exactly as they are. Save the file as `<code>.json`, for example `fr.json`.
-4. Click **Add language…** and pick the file. It appears in the list and in the sidebar's language
-   selector straight away.
+1. Under **Add your own language**, choose **Start from English** (or **Start from Indonesian**) and
+   click **Export template…**.
+2. In the file's `$meta` section, set `code` (like `fr` or `pt-br`) and `name` (written in that
+   language). Add `"dir": "rtl"` for a right-to-left language.
+3. Translate the values. Keep the keys, `{{placeholders}}` and tags like `<0>…</0>` as they are.
+   Save as `<code>.json`, for example `fr.json`.
+4. Click **Add language…** and pick the file. It shows up in the list and in the language selector.
 
-Things worth knowing:
+Good to know:
 
-- **Partial translations work.** Any string you leave out is shown in English.
-- **Safety checks.** A string whose placeholders don't match the English text is skipped (so a
-  missing `{{name}}` can't break a screen), as is any key the app doesn't have. The Languages page
-  shows how much of the app each language covers and how many strings were skipped.
-- **Plural forms.** Some languages need more plural forms than English's `_one` and `_other` (for
-  example `_few` or `_many`); add them next to the existing ones.
-- **Where they live.** Added languages are stored in the app's data folder
-  (`%APPDATA%\com.vladrafli.zagzig-tools\languages`); **Open languages folder** takes you there. You
-  can copy a file in by hand and click **Reload languages**, or remove a custom language from its
-  row. English and Indonesian are built in and can't be replaced or removed.
-- **Updates.** New versions of the app can add new strings; they show up in English in your
-  language until you translate them. Export a fresh template to see what's new.
-
-### Checking for updates
-
-See [Staying up to date](#5-staying-up-to-date).
+- **Partial translations work.** Missing strings show in English.
+- **Safety checks.** A string whose placeholders don't match English, or a key the app doesn't have,
+  is skipped. The Languages page shows coverage and skipped strings.
+- **Plural forms.** Add forms like `_few` or `_many` next to `_one` and `_other` if the language needs
+  them.
+- **Where they live.** In `%APPDATA%\com.vladrafli.zagzig-tools\languages`. **Open languages folder**
+  goes there, **Reload languages** picks up files you copied in, and a custom language can be removed
+  from its row. English and Indonesian can't be replaced or removed.
+- **Updates.** New app versions add strings that show in English until you translate them. Export a
+  fresh template to see what's new.
 
 ---
 
@@ -148,615 +130,503 @@ See [Staying up to date](#5-staying-up-to-date).
 
 ### Dashboard
 
-The landing page. Shows your signed-in user (and, on a domain-joined machine, directory details
-like title, department, and manager pulled over LDAP), an admin-rights banner if applicable, and
-summary cards for NRPT Rules, Connection Test, Network Routes, and DNS Servers with an **Open**
-button into each.
+The landing page. It shows your signed-in user (on a domain-joined PC, also title, department and
+manager from LDAP), the administrator banner when it applies, and summary cards for NRPT Rules,
+Connection Test, Network Routes and DNS Servers. Below them is a small card for every feature, grouped
+like the sidebar. Click one to open it.
 
 ### NRPT Rules
 
 *Network → NRPT Rules*
 
-Shows the Name Resolution Policy Table — the same rules `Get-DnsClientNrptRule` reports, which
-route DNS queries for a given namespace (e.g. `.corp.example.com`) to specific servers. Each rule
-card can be expanded ("details") to see every field: DNSSEC settings, DirectAccess settings, IPsec
-CA restriction, and so on.
+The Name Resolution Policy Table, the same rules `Get-DnsClientNrptRule` reports. They send DNS
+queries for a namespace (like `.corp.example.com`) to specific servers. Expand a rule to see every
+field, like DNSSEC, DirectAccess and IPsec settings.
 
-- **Removing a rule** is real and takes effect immediately, with a single UAC prompt if needed.
-- **Adding a rule** through the "New rule" form is currently session-only — it's kept in a
-  "Pending rules" list in the app but is **not written to Windows**. This is a known limitation,
-  not a bug: the form is there to compose a rule's fields, but applying it to the system isn't
-  wired up yet.
+- **Remove** is real and immediate, with one UAC prompt if needed.
+- **New rule** is session only. It is kept in a "Pending rules" list but **not written to Windows**.
+  This is a known limitation.
 
 ### Connection Test
 
 *Network → Connection Test*
 
-Enter a hostname or IP and run a test to see:
+Enter a hostname or IP and click **Run test**:
 
-- **Is it reachable?** — 4 ICMP pings, with average reply time and how many were answered
-- **Path it took** — a traceroute-style hop list to the target, with each hop's reverse-DNS
-  name shown alongside its address when one exists (`name [ip]`, the same convention
-  `tracert.exe` uses) — plenty of hops along the way have no PTR record, so this is normal
-  for at least some rows
+- **Is it reachable?** 4 pings, with the average reply time and how many were answered.
+- **Path it took.** A traceroute hop list. Each hop shows its reverse DNS name like `name [ip]` when
+  one exists. Many hops have no name, which is normal.
 
-Both run from a single "Run test" action, and your last several tests are kept in a **History**
-list you can re-run or clear.
+The last tests are kept in **History**, where you can re-run or clear them.
 
-**Saved hosts**: above the address box, **Save this host** keeps the current host under a name,
-and the dropdown loads one back in a click. The same list is shared with the **Port Scanner** (which
-also remembers the ports) and the **TLS Inspector** (which also remembers the port), so a host saved
-as "staging" on one page is there on the others. Saving under an existing name updates it and fills
-in anything the other pages know. **Manage** lists them and removes the ones you don't want. They're
-stored on this PC only.
+**Saved hosts:** **Save this host** stores the current host under a name, and the dropdown loads one
+back. The list is shared with the **Port Scanner** (which also remembers ports) and the **TLS
+Inspector** (which also remembers the port). Saving under an existing name updates it. **Manage**
+removes entries. They are stored on this PC only.
 
 ### Ports
 
 *Network → Ports*
 
-Shows which application is using which port — what `netstat -ano` plus a trip to Task Manager's
-Details tab would tell you, joined into one view. It needs no administrator rights.
+Shows which application uses which port, like `netstat -ano` joined with Task Manager's Details tab.
+No administrator rights needed.
 
-- **List**: every TCP connection and UDP endpoint, sorted by local port, with its protocol, local
-  address, remote address, state, and the owning process and PID. IPv6 addresses are shown in
-  brackets (`[::1]:8080`).
-- **Filters**: a state filter — **Listening** (the default; UDP endpoints are included, since
-  they're bound and waiting for traffic), **Established**, or **All states** — plus a protocol
-  filter (All / TCP / UDP).
-- **Search**: matches port, address, PID, process name, executable path, command line, description,
-  company, and Windows service name — handy for "who is using 8080?" or "what's this `svchost.exe`
-  listening on?".
-- **Process details**: click a row to expand it. You get the process name and PID, description,
-  company and version (from the executable's file properties), start time, parent process, memory
-  use, the Windows services it hosts (which tells you what's behind a shared `svchost.exe`), and
-  the full executable path and command line.
-- **Refresh**: connections change constantly, so the data is only cached for about ten seconds —
-  use the refresh button for a fresh read.
-- **Reserved port ranges**: an expandable section at the bottom lists the TCP and UDP port blocks
-  Windows has reserved (`netsh int ipv4 show excludedportrange`) — Hyper-V, WSL and Docker are the
-  usual owners. A port inside one of these can't be bound by an application even though nothing
-  listens on it, which is the classic cause of "port already in use" with an empty list. If you
-  search for a port number that isn't in use but falls inside a reserved range, the page says so.
-  A `*` marks an administered exclusion (set explicitly rather than picked dynamically).
-- **Free a port**: in an expanded row, **Stop process** force-closes the owning process after a
-  confirmation. It first tries with your own rights and only asks for administrator approval (one
-  UAC prompt) if Windows refuses. If the process hosts Windows services, each gets a **Stop
-  service** button, which is cleaner than killing the process (a service manager may restart a
-  killed process) and requires administrator approval. Critical Windows processes (such as
-  `System`, `csrss.exe`, `lsass.exe`) are never offered, and the app checks the PID still belongs
-  to the same process before stopping it, in case the list is out of date.
+- **List:** every TCP connection and UDP endpoint by local port, with protocol, addresses, state and
+  the owning process and PID. IPv6 addresses are in brackets (`[::1]:8080`).
+- **Filters:** state (**Listening** by default, **Established**, **All states**) and protocol (All,
+  TCP, UDP). UDP endpoints count as listening.
+- **Search:** matches port, address, PID, process name, path, command line, description, company and
+  service name. Good for "who is using 8080?".
+- **Process details:** click a row for the process name, PID, description, company, version, start
+  time, parent, memory, hosted Windows services (what's behind a shared `svchost.exe`), full path and
+  command line.
+- **Refresh:** data is cached for about ten seconds, so use the refresh button for a fresh read.
+- **Reserved port ranges:** the section at the bottom lists port blocks Windows reserved (Hyper-V,
+  WSL and Docker are the usual owners). An application can't bind a port inside one, even though
+  nothing listens on it. That is the classic "port already in use" with an empty list. `*` marks an
+  administered exclusion.
+- **Free a port:** **Stop process** force-closes the owner after confirmation. It tries with your own
+  rights first and asks for approval only if Windows refuses. For hosted services, **Stop service** is
+  cleaner (a killed process may be restarted) and needs approval. Critical processes (`System`,
+  `csrss.exe`, `lsass.exe`) are never offered, and the PID is rechecked before stopping.
+- **Allow in firewall:** on a listening port, **Allow port N in firewall…** opens the Firewall rule
+  dialog with the port, protocol and program filled in. Needs administrator rights.
 
-- **Allow in firewall**: for a listening port, the expanded row has **Allow port N in firewall…**,
-  which opens the Firewall rule dialog already filled in with the port, protocol and the owning
-  program (see the Firewall page). Requires administrator rights.
-
-Windows hides the executable path and command line of processes owned by other users or the system
-from non-administrator accounts, so those rows show "—" for those fields. If a process exits
-between reading the list and clicking its row, the details say no information is available.
+Windows hides the path and command line of other users' processes from standard accounts, so those
+show "—". If a process exits before you click its row, the details say no information is available.
 
 ### Port Proxy
 
 *Network → Port Proxy*
 
-Manages `netsh interface portproxy` rules, which forward a port on this PC to another address —
-the usual way to reach a service inside WSL or a container from elsewhere on the network. Windows
-has no GUI for them. Viewing rules needs no administrator rights; adding or removing one does
-(one UAC prompt, takes effect immediately).
+Manages `netsh interface portproxy` rules, which forward a port on this PC to another address. This
+is the usual way to reach a service in WSL or a container from the network. Viewing needs no
+administrator rights. Adding or removing does (one UAC prompt, immediate).
 
-- **List**: each rule's type (IPv4→IPv4, IPv4→IPv6, IPv6→IPv4 or IPv6→IPv6), the address and port
-  it listens on, and where it forwards to.
-- **Add a rule**: pick the type, then the listen address and port and the connect address (an IP
-  address or hostname) and port. Ports must be 1–65535.
-- **Remove**: deletes a rule after a confirmation.
+- **List:** each rule's type (IPv4 or IPv6 to IPv4 or IPv6), listen address and port, and target.
+- **Add a rule:** pick the type, the listen address and port, and the connect address (IP or
+  hostname) and port. Ports are 1 to 65535.
+- **Remove:** deletes a rule after confirmation.
 
-A rule only forwards traffic — Windows Firewall still has to allow inbound connections on the
-listen port.
+A rule only forwards. Windows Firewall must still allow inbound connections on the listen port.
 
 ### Port Scanner
 
 *Network → Port Scanner*
 
-Checks which TCP ports on one host accept a connection. Only scan hosts you own or have permission
-to test. It needs no administrator rights.
+Checks which TCP ports on one host accept a connection. Scan only hosts you own or may test. No
+administrator rights needed.
 
-- **Host and ports**: a hostname or IP address, plus a preset — **Common ports**, **Web servers**,
-  **Databases**, **Dev servers**, **Well-known (1–1024)** — or **Custom…** with single ports and
-  ranges separated by commas (`22,80,443,8000-8100`). One host at a time, up to 4,096 ports.
-- **Timeout per port**: how long to wait for each answer (300 ms to 4 s). A longer timeout is
-  slower but surer on a slow or distant network.
-- **Results**: the open ports with the service they usually carry (HTTPS, SSH, PostgreSQL, ...),
-  plus how many ports were closed, filtered or failed. **Cancel** stops a scan and keeps what was
-  found so far.
+- **Host and ports:** a hostname or IP and a preset (**Common ports**, **Web servers**,
+  **Databases**, **Dev servers**, **Well-known (1 to 1024)**) or **Custom…** like `22,80,443,8000-8100`.
+  One host at a time, up to 4,096 ports.
+- **Timeout per port:** 300 ms to 4 s. Longer is slower but surer on a slow network.
+- **Results:** open ports with the service they usually carry, and counts of closed, filtered and
+  failed ports. **Cancel** keeps what was found so far.
 
-It's a plain connect scan: a port that answers is **open**, one that refuses the connection is
-**closed**, and one that never answers is probably **filtered** by a firewall. Windows can take a
-couple of seconds to refuse a connection to the PC's own address, so when scanning this PC a closed
-port may be counted as filtered — open ports are reported correctly either way. It can't scan UDP
-or sweep a range of hosts.
+A port that answers is **open**, one that refuses is **closed**, and one that never answers is
+probably **filtered** by a firewall. Windows can take a couple of seconds to refuse a connection to
+this PC's own address, so a closed local port may count as filtered. Open ports are always right. It
+can't scan UDP or sweep several hosts.
 
 ### Wake-on-LAN
 
 *Network → Wake-on-LAN*
 
-Turns on a PC that's off or asleep by sending it a "magic packet" over the network. **The other PC
-doesn't need this app or any software** — its network card recognises the packet while the PC is
-off. Needs no administrator rights.
+Turns on a PC that is off or asleep by sending a "magic packet". **The other PC needs no software**,
+because its network card recognises the packet. No administrator rights needed.
 
-- **Devices**: add a device with a name and its MAC address (`AA-BB-CC-DD-EE-FF`; colons, dashes
-  and dotted forms are all accepted). **Fill in from a device this PC has seen** copies a MAC and
-  address from the Neighbors list. Devices are saved and can be edited or deleted.
-- **Wake**: sends the packet — three copies, from every physical adapter that's up, so it leaves
-  through your real network instead of a WSL or VPN adapter. **Send from** lets you pick one adapter
-  instead. A device can also have its own UDP port (default 9) and a broadcast address (default
-  `255.255.255.255`; use your subnet's, such as `192.168.1.255`, if that doesn't work).
-- **Did it work?** A magic packet gets no reply. If you give a device an **address to ping**, the
-  app pings it for up to 90 seconds afterwards and shows "Online after N seconds" when it starts
-  answering. Without one, it can only tell you the packet was sent.
+- **Devices:** add a name and MAC address (`AA-BB-CC-DD-EE-FF`, colons and dots also work).
+  **Fill in from a device this PC has seen** copies one from the Neighbors list. Devices are saved
+  and can be edited or deleted.
+- **Wake:** sends three copies from every physical adapter that is up, so the packet leaves through
+  your real network and not WSL or VPN. **Send from** picks one adapter. A device can have its own UDP
+  port (default 9) and broadcast address (default `255.255.255.255`, or your subnet's like
+  `192.168.1.255`).
+- **Did it work?** A magic packet gets no reply. With an **address to ping**, the app pings for up to
+  90 seconds and shows "Online after N seconds". Without one, it only says the packet was sent.
 
-Waking only works if Wake-on-LAN is enabled in the target's BIOS/UEFI (often called "Wake on
-LAN" or "Power on by PCI-E device") and in its network card's driver settings in Device Manager
-(Power Management: allow the device to wake the computer / only a magic packet). On Windows, turning
-off Fast Startup helps when waking from a full shutdown. The PC must still be plugged into power and
-a network cable, and be on the same network as this PC — the packet is a broadcast, which doesn't
-cross routers. PCs on Wi-Fi rarely support it.
+It works only if Wake-on-LAN is on in the target's BIOS/UEFI and in its network card driver (Device
+Manager, Power Management). Turning off Fast Startup helps from a full shutdown. The PC must be
+plugged in, wired, and on the same network, since broadcasts don't cross routers. Wi-Fi PCs rarely
+support it.
 
 ### Network Adapters
 
 *Network → Network Adapters*
 
-One card per network adapter: status, IPv4 and IPv6 addresses, default gateway, DNS servers, whether
-DHCP is on, MAC address, link speed, MTU, media type, and bytes received and sent (totals since the
-adapter came up). Physical adapters are listed first; a checkbox hides virtual ones (WSL, Hyper-V,
-VPN and similar). Viewing needs no administrator rights.
+One card per adapter: status, IPv4 and IPv6 addresses, gateway, DNS servers, DHCP, MAC, link speed,
+MTU, media type, and bytes received and sent since it came up. Physical adapters come first, and a
+checkbox hides virtual ones (WSL, Hyper-V, VPN). Viewing needs no administrator rights. Data is cached
+for about fifteen seconds.
 
-- **Enable / Disable**: turns the adapter on or off. Requires administrator rights.
-- **Renew DHCP**: asks the DHCP server for a fresh lease (`ipconfig /renew`) — only available for
-  adapters that use DHCP and are enabled. Requires administrator rights.
-
-The data is cached for about fifteen seconds; use the refresh button for a fresh read.
+- **Enable / Disable:** turns the adapter on or off. Needs administrator rights.
+- **Renew DHCP:** asks for a fresh lease (`ipconfig /renew`), only for enabled DHCP adapters. Needs
+  administrator rights.
 
 ### Network Routes
 
 *Network → Network Routes*
 
-The Windows IP routing table — what `route print` / `route add` / `route delete` manage from the
-command line, built on the modern `NetTCPIP` cmdlets. By default, purely local/system routes are
-hidden; toggle **"Show system routes"** to see everything.
+The IP routing table, like `route print`, `route add` and `route delete`. Local and system routes are
+hidden unless you turn on **Show system routes**.
 
-- **Add route**: destination (CIDR), next hop, interface, an optional metric, and whether to
-  persist the route across a restart. Requires administrator rights and takes effect immediately.
-- **Remove route**: per-row delete button (locked without admin rights).
+- **Add route:** destination (CIDR), next hop, interface, optional metric, and whether to keep it
+  across restarts. Needs administrator rights, immediate.
+- **Remove route:** the delete button on a row.
 
 ### DNS Servers
 
 *Network → DNS Servers*
 
-Per-network-adapter DNS server configuration — like the "Use the following DNS server addresses"
-dialog in adapter properties, except that dialog only offers a preferred and an alternate server;
-this lets you set as many as you need per adapter.
+DNS servers per adapter, as many as you need (the Windows dialog offers only two).
 
-- **Edit**: opens a dialog to add/remove/reorder servers for that adapter (order is the order
-  they're tried). Requires administrator rights.
-- **Reset to automatic**: switches the adapter back to DHCP-provided DNS servers.
+- **Edit:** add, remove or reorder servers. Order is the order they are tried. Needs administrator
+  rights.
+- **Reset to automatic:** back to DHCP-provided servers.
 
 ### DNS Lookup
 
 *Network → DNS Lookup*
 
-A `dig`-style query tool. Enter a name, pick a record type (A, AAAA, CNAME, MX, NS, TXT, SOA, PTR,
-SRV, CAA or DNSKEY) and, optionally, a specific DNS server to ask (an IP address) — leave it empty
-to use the system resolver. Results show each record's name, type, TTL, section (Answer, Authority
-or Additional) and data, plus the query time. The hosts file, LLMNR and mDNS are skipped, so the
-answer is what DNS itself says — handy for comparing what two servers return, or checking that a
-change has propagated. An unresolvable name shows the resolver's own error (for example "DNS name
-does not exist"). No administrator rights are needed.
+A `dig`-style query tool. Enter a name, pick a record type (A, AAAA, CNAME, MX, NS, TXT, SOA, PTR, SRV,
+CAA, DNSKEY) and optionally a DNS server IP (empty uses the system resolver). Results show name, type,
+TTL, section and data, plus the query time. The hosts file, LLMNR and mDNS are skipped, so you see what
+DNS itself says. Good for comparing two servers or checking propagation. No administrator rights
+needed.
 
 ### DNS Cache
 
 *Network → DNS Cache*
 
-The resolver cache — what `ipconfig /displaydns` shows and `ipconfig /flushdns` clears, with no
-GUI anywhere in Windows for either. Lists every cached record (name, type, data, remaining TTL),
-including negative-cache entries (a lookup that came back empty, shown with no data and a status
-like "No records of this type").
+The resolver cache, like `ipconfig /displaydns`. It lists every cached record (name, type, data,
+remaining TTL), including negative entries.
 
-- **Flush DNS cache**: clears the entire cache. Unlike every other write in this app, this does
-  **not** need administrator rights — flushing the client resolver cache is allowed from a
-  standard session, so there's no UAC prompt here.
+- **Flush DNS cache:** clears it all. This is the one write that needs **no** administrator rights.
 
 ### DNS Monitor
 
 *Network → DNS Monitor*
 
-A background watcher: add a hostname (optionally against a specific DNS server; leave blank for
-the system default) and a check interval (1 second up to 30 minutes), and it repeatedly resolves
-that hostname and logs whether it succeeded, how long it took, and what addresses came back — even
-while you're on a different page of the app. Each monitor can be started/stopped independently, and
-its log cleared.
+A background watcher. Add a hostname, optionally a DNS server (blank is the system default), and an
+interval (1 second to 30 minutes). It keeps resolving the name and logs success, time and addresses,
+even while you are on another page. Each monitor starts, stops and clears its log on its own.
 
 ### Hosts File
 
 *Network → Hosts File*
 
-Edits `C:\Windows\System32\drivers\etc\hosts` — the file behind every "add this to your hosts
-file" troubleshooting guide, which has no dedicated GUI anywhere in Windows.
+Edits `C:\Windows\System32\drivers\etc\hosts`. All changes need administrator rights and are
+immediate.
 
-- **Structured view**: a table of entries (enabled toggle, IP, hostnames, comment) with per-row
-  enable/disable and delete, plus an "add entry" form. All of these require administrator rights
-  and take effect immediately.
-- **Raw editor**: an expandable text editor showing the whole file as-is, for anything the
-  structured view doesn't understand. Saving replaces the entire file and requires administrator
-  rights.
-- **Reordering**: drag an entry by the grip handle on the left of its row and drop it on another
-  row to move it above (dragging up) or below (dragging down) that row — drop on the first or last
-  row to send an entry to the very top or bottom. Only the dragged line moves; comments and blank
-  lines stay where they were. Requires administrator rights (one UAC prompt per move).
-- **Backups**: an expandable section at the bottom. A copy of the file is saved automatically
-  before every change made on this page — adding, removing, switching, reordering, a raw edit, or a
-  restore — unless it's identical to the newest copy, and the newest 30 are kept (in the app's data
-  folder). **Back up now** makes one on demand. **Compare / restore** shows exactly which lines a
-  restore would bring back and which it would remove, before you confirm. Restoring needs
-  administrator rights and takes a backup of the file it replaces first, so a restore can be undone
-  too. Backups contain the whole file, comments included.
+- **Structured view:** a table of entries (enabled toggle, IP, hostnames, comment) with per-row
+  enable, disable and delete, plus an add form.
+- **Raw editor:** the whole file as text, for anything the table doesn't understand. Saving replaces
+  the file.
+- **Reordering:** drag an entry by its grip and drop it on another row to move it above (dragging up)
+  or below (dragging down). Drop on the first or last row for the very top or bottom. Comments and
+  blank lines stay put. One UAC prompt per move.
+- **Backups:** a copy is saved before every change (add, remove, switch, reorder, raw edit, restore)
+  unless it matches the newest one. The newest 30 are kept in the app's data folder. **Back up now**
+  makes one on demand. **Compare / restore** shows the lines a restore would add and remove before you
+  confirm. A restore backs up the current file first, so it can be undone. Backups include comments.
 
 ### SSH Config
 
 *Network → SSH Config*
 
-Manages the `Host` entries in `~/.ssh/config` (`C:\Users\<you>\.ssh\config`) — the aliases OpenSSH
-expands before connecting, so `ssh prod` can stand in for a full user, address, port and key. The
-file belongs to your account, so nothing on this page needs administrator rights.
+Manages `Host` entries in `~/.ssh/config` (`C:\Users\<you>\.ssh\config`), the aliases OpenSSH expands
+so `ssh prod` can stand for a full user, address, port and key. No administrator rights needed.
 
-- **List**: one row per `Host` block — alias, `user@hostname` (plus `via <proxy jump>` when set),
-  identity file and port. A "+N other options" note counts options in the block this page doesn't
-  manage (e.g. `ForwardAgent`).
-- **Add / edit**: alias, hostname, user, port, identity file and proxy jump. Editing only touches
-  those keys — every other line and comment in the block is kept, and clearing a field removes
-  that key. Port must be 1–65535, and values can't contain newlines or quotes. An alias that
-  already exists can't be added again.
-- **Remove**: deletes the whole `Host` block, including options the page doesn't show.
-- **Raw editor**: an expandable text editor for the whole file — use it for `Match` blocks,
-  `Include` lines and anything else the list doesn't cover. Saving replaces the entire file.
+- **List:** one row per `Host` block with alias, `user@hostname` (plus `via <proxy jump>`), identity
+  file and port. "+N other options" counts options the page doesn't manage, like `ForwardAgent`.
+- **Add / edit:** alias, hostname, user, port, identity file and proxy jump. Editing touches only
+  those keys, and clearing a field removes its key. Ports are 1 to 65535, values can't hold newlines
+  or quotes, and an alias can't be added twice.
+- **Remove:** deletes the whole `Host` block.
+- **Raw editor:** the whole file, for `Match` blocks, `Include` lines and the rest.
 
-If the file changes on disk between loading the list and clicking Edit or Remove, the action is
-refused with a "refresh and try again" message rather than touching the wrong lines.
+If the file changes on disk after loading, Edit and Remove refuse and ask you to refresh.
 
 ### WSL
 
 *Network → WSL*
 
-Windows Subsystem for Linux: see what's running, stop things, restart WSL, and edit the global
-`.wslconfig`. Everything except the force restart runs without administrator rights.
+Windows Subsystem for Linux: see what's running, stop things, restart WSL and edit `.wslconfig`.
+Everything except Force restart works without administrator rights.
 
-- **Distributions**: each installed distro with its state (running/stopped), WSL version and a
-  "Default" badge. Per row you can **stop** a distro (`wsl --terminate`) or **set it as default**.
-- **Shut down WSL**: runs `wsl --shutdown` after a confirmation — stops every distro and the WSL
-  virtual machine. WSL starts again the next time you use it, and that's also when a changed
-  `.wslconfig` takes effect. Unsaved work inside running distros is lost.
-- **`.wslconfig` form**: memory limit, processors, swap size, networking mode, auto memory reclaim,
-  localhost forwarding and nested virtualization (the `[wsl2]` section of `%USERPROFILE%\.wslconfig`).
-  Leaving a field on "Default" removes that key from the file; every other line, comment and
-  section is kept. Changes apply after WSL is shut down and started again.
-- **Raw editor**: an expandable text editor for the whole `.wslconfig`, for sections and options
-  the form doesn't cover. Saving replaces the entire file.
+- **Distributions:** each distro's state, WSL version and a "Default" badge. **Stop** a distro
+  (`wsl --terminate`) or **set it as default**.
+- **Shut down WSL:** `wsl --shutdown` after confirmation. It stops every distro and the WSL VM, and a
+  changed `.wslconfig` takes effect on the next start. Unsaved work in running distros is lost.
+- **`.wslconfig` form:** memory limit, processors, swap, networking mode, auto memory reclaim,
+  localhost forwarding and nested virtualization (the `[wsl2]` section of
+  `%USERPROFILE%\.wslconfig`). A field left on "Default" removes its key, and everything else in the
+  file is kept.
+- **Raw editor:** the whole `.wslconfig`, for options the form doesn't cover.
 
 #### When WSL is broken: Force restart
 
-If WSL stops answering (for example the Docker Desktop integration is gone and `wsl --shutdown`
-hangs), the page notices — status checks time out instead of freezing the app — and shows
-"WSL isn't responding" with the **Force restart** button highlighted. Force restart:
+If WSL stops answering (for example Docker's integration is gone and `wsl --shutdown` hangs), the page
+shows "WSL isn't responding" and highlights **Force restart**. It does this:
 
-1. Closes Docker Desktop first, if you leave **Also restart Docker Desktop** ticked.
-2. Stops the WSL service (`WSLService` / `LxssManager`), kills any leftover WSL processes
-   (`wsl`, `wslhost`, `wslrelay`, `wslservice`, `wslg`, `vmmem`, `vmmemWSL`) and starts the service
-   again. This step needs administrator approval (one UAC prompt).
-3. Starts WSL again — the distros that were running before, or the default distro if none could be
-   detected — and then Docker Desktop. These are started **without** elevation, so nothing runs as
-   administrator by accident.
+1. Closes Docker Desktop, if **Also restart Docker Desktop** is ticked.
+2. Stops the WSL service (`WSLService` or `LxssManager`), kills leftover WSL processes (`wsl`,
+   `wslhost`, `wslrelay`, `wslservice`, `wslg`, `vmmem`, `vmmemWSL`) and starts the service again.
+   This needs administrator approval (one UAC prompt).
+3. Starts WSL again (the distros that were running, or the default one), then Docker Desktop. Both
+   start **without** elevation.
 
-Unsaved work inside running distros is lost, and Windows may refuse to kill `vmmem`; stopping the
-service is what actually tears the VM down. If a distro or Docker Desktop doesn't come back, a
-warning toast says which.
+Unsaved work in running distros is lost, and Windows may refuse to kill `vmmem` (stopping the service
+is what tears down the VM). A warning toast says which one didn't come back.
 
-When Docker Desktop is installed in its default location (`Program Files\Docker\Docker`), a
-separate **Restart Docker Desktop** button is also available: it closes Docker Desktop and its
-helper processes, then launches it again — for when WSL is fine but Docker's integration is
-missing or stuck. It needs no administrator rights, and running containers are stopped.
+If Docker Desktop is in its default folder (`Program Files\Docker\Docker`), **Restart Docker
+Desktop** also appears. It closes Docker and its helpers and launches it again, for when WSL is fine
+but Docker's integration is stuck. It needs no administrator rights and stops running containers.
 
 ### Firewall
 
 *Network → Firewall*
 
-Lists every Windows Defender Firewall rule — useful for "why is this port blocked?" next to the
-Ports page. Reading rules needs no administrator rights.
+Lists every Windows Defender Firewall rule, useful for "why is this port blocked?". Reading needs no
+administrator rights.
 
-- **Profiles**: whether the Domain, Private and Public firewall profiles are on or off.
-- **Rules**: each rule's name (with its program path or group underneath), direction (inbound or
-  outbound), action (allow or block), protocol, local port and profile. Search matches name,
-  program, group, protocol, ports and profile; filters narrow by direction, action, and
-  enabled/disabled. The list shows 150 rules at a time — use **Show more** for the rest.
-- **Turn a rule on or off**: the switch at the start of each row. Requires administrator rights.
-  The rule is matched by its exact internal name, so a name containing a wildcard can't affect
-  other rules.
-
-- **New rule**: creates an allow or block rule for a port (a single port, several, or a range like
-  `8000-8100`), inbound or outbound, TCP or UDP, optionally for one program (a full path), on the
-  profiles you pick. **Local network only** (the default) limits an allow rule to your own subnet;
-  **Any address** opens it to everyone who can reach the PC, and the dialog warns you. Requires
-  administrator rights.
-- **From the Ports page**: expand a listening port's row and choose **Allow port N in firewall…**.
-  The dialog opens already filled in with the port, protocol and the program that owns it.
-- **Delete**: every rule created here is tagged as this app's, shows a trash button, and is the only
-  kind this app will delete — Windows' own rules can be switched off but never removed from here.
-
-The per-profile on/off state is display-only.
+- **Profiles:** whether Domain, Private and Public are on or off (display only).
+- **Rules:** name (with program path or group below), direction, action, protocol, local port and
+  profile. Search matches name, program, group, protocol, ports and profile. Filters cover direction,
+  action and enabled state. 150 rules show at a time, so use **Show more**.
+- **On or off:** the switch at the start of a row. Needs administrator rights. Rules are matched by
+  exact name, so a wildcard can't touch other rules.
+- **New rule:** an allow or block rule for a port (single, several, or a range like `8000-8100`),
+  inbound or outbound, TCP or UDP, optionally for one program (full path), on the profiles you pick.
+  **Local network only** (default) limits an allow rule to your subnet. **Any address** opens it to
+  everyone who can reach the PC, and the dialog warns you. Needs administrator rights.
+- **From the Ports page:** **Allow port N in firewall…** opens the dialog already filled in.
+- **Delete:** rules made here are tagged as this app's and show a trash button. They are the only
+  rules this app deletes. Windows' own rules can be switched off but never removed from here.
 
 ### Neighbors (ARP)
 
 *Network → Neighbors (ARP)*
 
-The IP-to-MAC cache Windows keeps for IPv4 (ARP) and IPv6 (neighbor discovery) — which devices
-this PC has recently talked to on the local network, with each entry's state (Reachable, Stale,
-and so on) and the interface it was learned on. Permanent entries (multicast and broadcast
-addresses Windows maintains itself) are hidden unless you tick **Show permanent entries**.
+The IP to MAC cache for IPv4 (ARP) and IPv6, showing which devices this PC recently talked to, with
+state (Reachable, Stale, ...) and interface. Permanent entries are hidden unless you tick **Show
+permanent entries**. Data is cached for about fifteen seconds.
 
-- **Remove an entry** or **Clear cache** (all learned entries) to force fresh lookups — handy after
-  a device changes its IP or MAC. Both require administrator rights; permanent entries are never
-  removed.
-- The data is cached for about fifteen seconds; use the refresh button for a fresh read.
+- **Remove an entry** or **Clear cache** forces fresh lookups, useful after a device changes its IP or
+  MAC. Both need administrator rights. Permanent entries are never removed.
 
 ### VPN
 
 *Network → VPN*
 
-The VPN connections built into Windows (the ones under Settings → Network → VPN, for the current
-user and for all users) with their status, server, tunnel type, authentication methods, split
-tunneling and whether credentials are remembered. **Connect** and **Disconnect** use `rasdial`
-and need no administrator rights; a connection that needs credentials you haven't saved will fail
-with Windows' own error message.
+The VPN connections built into Windows (Settings → Network → VPN, for you and all users), with
+status, server, tunnel type, authentication, split tunneling and whether credentials are saved.
+**Connect** and **Disconnect** use `rasdial` and need no administrator rights. A connection that needs
+unsaved credentials fails with Windows' own error.
 
-VPN apps that bring their own client and adapter (WireGuard, OpenVPN, vendor clients) aren't
-Windows VPN profiles and don't appear here. VPN connections are often what NRPT rules are tied
-to, so this pairs with the NRPT Rules page.
+VPN apps with their own client and adapter (WireGuard, OpenVPN, vendor clients) aren't Windows VPN
+profiles and don't appear. VPN connections often tie to NRPT rules, so this pairs with NRPT Rules.
 
 ### Wi-Fi
 
 *Network → Wi-Fi*
 
-The wireless networks saved on this PC: name, security (authentication and encryption), whether
-the network connects automatically or manually, and auto-switch. Listing needs no administrator
-rights. If there's no wireless adapter, or the WLAN service isn't running, the page says so.
+Wireless networks saved on this PC: name, security, connect mode and auto-switch. Listing needs no
+administrator rights. Without a wireless adapter or WLAN service, the page says so. Only saved
+networks show, not nearby ones.
 
-**Show password** displays a saved network's passphrase — the same information Windows' own "View
-Wi-Fi security key" shows. It needs administrator approval (one UAC prompt) and a confirmation
-step first, because anyone who can see your screen will see the password. The password is read
-only when you confirm, kept only while the window is open (there's a **Copy** button), and is
-never stored, cached or logged by the app. Open networks, and networks that sign in with a
-certificate or 802.1X, have no saved passphrase and the button is disabled or reports that. Only
-saved networks are shown — nearby (scanned) networks aren't listed.
+**Show password** displays a saved passphrase, like Windows' "View Wi-Fi security key". It needs
+administrator approval (one UAC prompt) and a confirmation, because anyone who can see your screen
+sees the password. It is read only when you confirm, kept only while the window is open (**Copy**
+works), and never stored, cached or logged. Open networks and certificate or 802.1X networks have no
+passphrase.
 
 ### Proxy Settings
 
 *Network → Proxy Settings*
 
-The **WinHTTP** proxy (what `netsh winhttp show proxy` reports) — a separate, machine-wide setting
-from the proxy under Settings → Network. Windows Update's underlying service and many background
-agents and CLI tools only honor this one, which is why it's easy to set the "wrong" proxy and have
-some things still fail.
+The **WinHTTP** proxy (`netsh winhttp show proxy`), a machine-wide setting separate from Settings →
+Network. Windows Update's service and many background agents and CLI tools honor only this one, which
+is why a wrong setting can break some things.
 
-- View the current WinHTTP proxy (direct access, or a server + bypass list).
-- **Set proxy**: server address and optional bypass list. Requires administrator rights.
-- **Reset to direct access**: clears it back to no proxy.
-- **Import from system proxy**: copies whatever's configured under Settings → Network → Proxy into
-  WinHTTP — the quick fix when a tool ignores the proxy you already set elsewhere.
+- View the current proxy (direct access, or server plus bypass list).
+- **Set proxy:** server and optional bypass list. Needs administrator rights.
+- **Reset to direct access:** removes the proxy.
+- **Import from system proxy:** copies the Settings → Network → Proxy values into WinHTTP, the quick
+  fix when a tool ignores the proxy you set elsewhere.
 
 ### Services
 
 *System → Services*
 
-Windows services, much like `services.msc`: each service's display name, internal name and
-description, whether it's running, and its startup type. Reading needs no administrator rights;
-every change does (one UAC prompt).
+Windows services like `services.msc`: display name, internal name, description, state and startup
+type. Reading needs no administrator rights, and every change does (one UAC prompt).
 
-- **Search and filters**: search matches name, description, account and path; filter by state
-  (Running / Stopped) and startup type (Automatic / Manual / Disabled). The list shows 100
-  services at a time.
-- **Start, stop, restart**: the buttons on each row. Stopping and restarting also affect services
-  that depend on it, and both ask for confirmation first.
-- **Startup type**: Automatic, Automatic (delayed), Manual or Disabled, changed from the dropdown
-  on the row. Setting a service to Disabled asks for confirmation — a disabled service can't be
-  started even by Windows. Driver-level services (boot/system start) show their type but can't be
-  changed here.
+- **Search and filters:** search matches name, description, account and path. Filter by state
+  (Running, Stopped) and startup type (Automatic, Manual, Disabled). 100 services show at a time.
+- **Start, stop, restart:** buttons on each row. Stop and restart also affect dependent services and
+  ask first.
+- **Startup type:** Automatic, Automatic (delayed), Manual or Disabled, from the row's dropdown.
+  Disabled asks first, since not even Windows can start it. Driver services (boot or system start)
+  can't be changed here.
 
-Stopping or disabling a core service can break networking or other Windows features, so go
-carefully. Services are matched by exact name.
+Stopping or disabling a core service can break networking and other features. Services are matched by
+exact name.
 
 ### Event Log
 
 *System → Event Log*
 
-Recent Windows events, filtered to what this app is about. Reading these logs needs no
-administrator rights (the Security log, which does, isn't offered).
+Recent Windows events, filtered to what this app covers. Reading needs no administrator rights (the
+Security log isn't offered).
 
-- **Source**: **Network & DNS** (TCP/IP, DHCP client, DNS client, network location awareness,
-  RAS/VPN and WLAN events), **WSL, Hyper-V & Docker**, or the plain **System** or **Application**
-  log. Sources for Docker and Hyper-V that don't exist on your machine are skipped quietly.
-- **Level**: errors only, errors and warnings, or everything. **Time window**: from the last hour
-  to the last 30 days. **Maximum events**: 100, 200 or 500.
-- **Filter by text**: matches the event message or provider; press Enter to apply it. The text
-  search looks through up to the 2,000 most recent matching events per source.
-- Click an event to see its full message, log and ID. Changing the source, level, window or limit
-  reloads the list; use the refresh button to reload on demand.
+- **Source:** **Network & DNS** (TCP/IP, DHCP client, DNS client, network location awareness, RAS/VPN,
+  WLAN), **WSL, Hyper-V & Docker**, or the plain **System** or **Application** log. Missing Docker or
+  Hyper-V logs are skipped quietly.
+- **Level:** errors only, errors and warnings, or everything. **Time window:** last hour to 30 days.
+  **Maximum events:** 100, 200 or 500.
+- **Filter by text:** matches message or provider, applied with Enter. It searches the 2,000 newest
+  matching events per source.
+- Click an event for its full message, log and ID. Changing a setting reloads the list.
 
 ### Environment Variables
 
 *System → Environment Variables*
 
-The variables Windows hands to every program, including `PATH` — an alternative to the "Edit the
-system environment variables" dialog, with a proper list editor and an undo for every change.
-Reading both scopes needs no administrator rights; **editing your own (User) variables doesn't
-either**, while **System** variables apply to everyone on the PC and need administrator approval
-(one UAC prompt per change).
+The variables Windows hands to every program, including `PATH`. It replaces the system dialog with a
+list editor and undo for every change. Reading needs no administrator rights. Your own (User)
+variables can be edited without them, while **System** variables need approval (one UAC prompt per
+change).
 
-- **Two scopes**: switch between **User variables** and **System variables** at the top. Search
-  matches names and values. A variable stored as *Expandable* (a `%VARIABLE%`-style value that
-  Windows resolves when it's used) is marked as such.
-- **Add, edit, delete**: a variable's name can't be changed once it exists (add a new one and delete
-  the old one instead). Adding a name that already exists is refused rather than overwriting it.
-  When a value contains `%SOMETHING%` references the **Expandable value** box switches on by
-  itself — otherwise the reference would be stored literally and never resolved. Values are read
-  and saved exactly as stored: unlike many tools, `%SystemRoot%` stays `%SystemRoot%` instead of
-  being replaced by `C:\Windows`.
-- **Edit as list**: for `PATH`-style variables (and any value containing `;`), each entry gets its
-  own row. Move entries up and down, remove or edit them, and add new ones. For variables that hold
-  folders, each row says whether the folder exists (`%VARIABLE%` references are expanded for the
-  check; network paths aren't probed) and flags duplicates. **Remove duplicates** and **Remove
-  missing folders** clean up in one click — nothing is saved until you press **Save**. A length
-  counter warns past 2,047 characters, beyond which some older programs ignore the rest. Values are
-  limited to 16,000 characters.
-- **Protected variables**: Windows needs a handful of system variables (`Path`, `PATHEXT`,
-  `ComSpec`, `SystemRoot`, `windir`, `TEMP`, `TMP`, and a few more) to run, so those can be edited
-  but not deleted.
-- **Change history**: every change made here is recorded together with the value it replaced.
-  **Undo** puts the variable back (or removes it, if it didn't exist before) and is itself
-  recorded, so an undo can be undone. The last 50 changes are kept in the app's data folder —
-  which means a variable's old value, including anything sensitive in it, is stored there.
+- **Two scopes:** **User variables** and **System variables**. Search matches names and values.
+  *Expandable* variables (with `%VARIABLE%` references) are marked.
+- **Add, edit, delete:** a name can't change once it exists (add a new one and delete the old one).
+  Adding an existing name is refused. The **Expandable value** box turns on by itself when a value
+  has `%SOMETHING%`, otherwise it would be stored literally. Values are saved as stored, so
+  `%SystemRoot%` stays `%SystemRoot%`.
+- **Edit as list:** for `PATH`-style values (or any value with `;`), each entry gets a row. Move,
+  edit, remove and add entries. For folder lists, each row says whether the folder exists
+  (`%VARIABLE%` is expanded, network paths aren't probed) and flags duplicates. **Remove duplicates**
+  and **Remove missing folders** clean up in one click, and nothing is saved until **Save**. A
+  counter warns past 2,047 characters, where older programs ignore the rest. The limit is 16,000.
+- **Protected variables:** `Path`, `PATHEXT`, `ComSpec`, `SystemRoot`, `windir`, `TEMP`, `TMP` and a
+  few more can be edited but not deleted.
+- **Change history:** each change is recorded with the value it replaced. **Undo** restores it (or
+  removes the variable if it was new) and is recorded too, so an undo can be undone. The last 50 are
+  kept in the app's data folder, including any sensitive old values.
 
-Changes are written to the registry and Windows is told the environment changed, so File Explorer
-and any program you start afterwards see them. **Programs that were already running — open
-terminals, editors, IDEs — keep their old environment** until you restart them.
+Changes go to the registry and Windows is told, so Explorer and newly started programs see them.
+**Programs already running, like terminals and IDEs, keep the old environment** until restarted.
 
 ### Startup
 
 *System → Startup*
 
-What starts when you sign in to Windows: the registry Run keys (your own, all users', and the
-32-bit all-users one) and the two Startup folders (yours and the all-users one). For each entry you
-see the program's description and company (from the file's properties), its command line, and where
-it comes from.
+What starts when you sign in: the registry Run keys (yours, all users', and the 32-bit all-users one)
+and the two Startup folders (yours and all users'). Each entry shows description and company, command
+line and source.
 
-- **Switch**: turns an entry on or off using the same flag Task Manager's Startup tab uses, so the
-  two always agree. Turning something off doesn't delete it, and turning it back on restores it
-  exactly. Entries that apply to all users need administrator approval to change; your own don't.
-- **File not found**: flagged in red when the program an entry points to no longer exists — usually
-  a leftover from an uninstalled program. (Programs under the Store-app folder can't be checked, so
-  they're never flagged.)
-- **Show the file in Explorer** opens the folder with the program selected.
-- Search matches name, command, company and description; the filter shows all, only enabled, or
-  only disabled entries.
+- **Switch:** turns an entry on or off with the same flag Task Manager uses, so the two agree.
+  Turning off doesn't delete, and turning on restores it exactly. All-users entries need
+  administrator approval, yours don't.
+- **File not found:** shown in red when the target no longer exists, usually after an uninstall.
+  Store-app folders can't be checked and are never flagged.
+- **Show the file in Explorer:** opens the folder with the program selected.
+- Search matches name, command, company and description. The filter shows all, enabled or disabled.
 
-Scheduled tasks and Windows services that start at boot aren't listed here — use the Services page
-for services.
+Scheduled tasks and boot services aren't listed. Use Services for those.
 
 ### Diagnostic Report
 
 *System → Diagnostic Report*
 
-Gathers what this app knows about the PC into one Markdown report you can attach to a support
-ticket or send to a colleague. Nothing is uploaded: the report appears on screen, and you copy it or
-save it as a `.md` or `.txt` file. It needs no administrator rights, and building one takes a few
-seconds because the sections are collected at the same time.
+Collects what the app knows about the PC into one Markdown report for a support ticket or colleague.
+Nothing is uploaded. The report stays on screen until you copy it or save it as `.md` or `.txt`. No
+administrator rights needed, and it takes a few seconds.
 
-- **Sections** (all on by default): **System** (Windows version and build, hardware, uptime, whether
-  you're an administrator), **Network adapters**, **DNS client settings**, **NRPT rules**,
-  **Routes** (default routes and a total), **Proxy**, **Hosts file** (active entries only; comments
-  are left out), **Listening ports** (with the process behind each, up to 120), **Firewall**
-  (profile on/off state and rule counts), **WSL and Docker**, and **Recent network errors** (network
-  and DNS errors and warnings from the last 24 hours). A section that can't be read says so in the
-  report instead of stopping it.
-- **Hide the computer and user names and MAC addresses** (on by default): the names become
-  `<computer>` and `<user>` wherever they appear, including inside folder paths and event messages,
-  and MAC addresses become `xx-xx-xx-xx-xx-xx`.
+- **Sections** (all on by default): **System** (Windows version, hardware, uptime, administrator
+  status), **Network adapters**, **DNS client settings**, **NRPT rules**, **Routes** (defaults and
+  total), **Proxy**, **Hosts file** (active entries only), **Listening ports** (with processes, up to
+  120), **Firewall** (profile state and rule counts), **WSL and Docker**, **Recent network errors**
+  (last 24 hours). A section that can't be read says so and doesn't stop the rest.
+- **Hide the computer and user names and MAC addresses** (on by default): they become `<computer>`,
+  `<user>` and `xx-xx-xx-xx-xx-xx` everywhere, including paths and event messages.
 - **Hide the last part of IPv4 addresses** (off by default): `192.168.1.20` becomes `192.168.1.x`.
-  Loopback addresses (`127.x`) and `0.0.0.0` are left alone, IPv6 addresses aren't masked, and the
-  System section's version numbers are never touched.
+  Loopback (`127.x`) and `0.0.0.0` stay, IPv6 isn't masked, and version numbers are untouched.
 
-The report never contains saved Wi-Fi passwords or environment variable values. Read it through
-before sharing it all the same — host names in the hosts file, folder names and process names can
-still identify you or your organisation.
+The report never contains saved Wi-Fi passwords or environment variable values. Still read it before
+sharing, since hostnames, folder names and process names can identify you or your organisation.
 
 ### Code Signing
 
 *Dev Tools → Code Signing*
 
-A wrapper around `signtool.exe` from the Windows SDK (not part of Windows itself — the page first
-locates it, auto-detecting common Windows Kits install paths, or falling back to whatever's on
-`PATH`; you can also locate a copy manually). Unlike the network features, this page isn't gated
-by administrator rights — it's gated only on whether `signtool.exe` was found.
+A wrapper around `signtool.exe` from the Windows SDK, which isn't part of Windows. The page looks for
+it in common Windows Kits paths and on `PATH`, and you can locate a copy yourself. It needs no
+administrator rights, only a found `signtool.exe`.
 
-- **Sign a file**: pick a file, then either a certificate from your personal certificate store
-  (`CurrentUser\My`) or a `.pfx`/`.p12` file and its password, plus digest algorithm (SHA256/SHA1),
-  an optional timestamp server, and an optional description. Output (signtool's own console
-  output) is shown inline.
-- **Verify a signature**: pick a file and check whether it's signed and trusted.
+- **Sign a file:** pick a file, then a certificate from your personal store (`CurrentUser\My`) or a
+  `.pfx`/`.p12` file with its password. Choose the digest (SHA256 or SHA1), an optional timestamp
+  server and an optional description. signtool's output shows inline.
+- **Verify a signature:** checks whether a file is signed and trusted.
 
 ### TLS Inspector
 
 *Dev Tools → TLS Inspector*
 
-Connects to a server, does the TLS handshake, and shows what it presents — handy when a tool, a
-browser or a script refuses to talk to a local or internal HTTPS service and you need to know why. It
-needs no administrator rights, and nothing is sent after the handshake.
+Connects to a server, does the TLS handshake and shows what it presents. Good for finding out why a
+tool or browser refuses a local or internal HTTPS service. No administrator rights needed, and nothing
+is sent after the handshake.
 
-- **Host, port and server name**: the port defaults to 443. **Server name** sets the name sent
-  during the handshake (SNI); leave it empty to use the host. Fill it in when connecting by IP
-  address, or when a server holds several certificates and picks one by name.
-- **Verdicts** at the top: whether **Windows trusts** the certificate, whether its **names cover**
-  the name you connected with, and how long until it **expires** (or that it already has). An
-  outdated protocol (TLS 1.1 or older) is flagged too.
-- **Connection**: the TLS version, cipher, key exchange and hash that were negotiated, and how long
-  the handshake took.
-- **Server certificate**: subject, issuer, validity dates, key type and size, signature algorithm,
-  serial number, thumbprint, and every name it covers.
-- **Certificate chain**: each certificate from the server's up to the root, with any problem Windows
-  found at that step (not trusted, expired, ...).
+- **Host, port and server name:** the port defaults to 443. **Server name** is the name sent in the
+  handshake (SNI), and empty means the host. Fill it in when connecting by IP or when a server picks a
+  certificate by name.
+- **Verdicts:** whether **Windows trusts** the certificate, whether its **names cover** the name you
+  used, and how long until it **expires**. TLS 1.1 or older is flagged.
+- **Connection:** TLS version, cipher, key exchange, hash and handshake time.
+- **Server certificate:** subject, issuer, validity, key type and size, signature algorithm, serial,
+  thumbprint and every name it covers.
+- **Certificate chain:** each certificate up to the root, with any problem found at that step.
 
-"Trusted" means *Windows* trusts it, using the Windows certificate store — which is what most
-Windows tools, .NET apps and PowerShell go by. Browsers such as Firefox and tools that bring their own
-list of authorities (Node.js, Python, Java and others) can decide differently. A self-signed or
-private-CA certificate shows as not trusted until its CA is added to **Trusted Root Certification
-Authorities** (use **Import…** on the Certificate Store page). If a server fails to send its intermediate
-certificates, Windows may not be able to complete the chain, which is a common cause of "works in the
-browser, fails in my tool".
+"Trusted" means *Windows* trusts it, which is what most Windows tools, .NET apps and PowerShell use.
+Firefox and tools with their own authority list (Node.js, Python, Java) may decide differently. A
+self-signed or private-CA certificate shows as not trusted until its CA is added to **Trusted Root
+Certification Authorities** (use **Import…** on the Certificate Store page). A server that omits its
+intermediate certificates is a common cause of "works in the browser, fails in my tool".
 
-Certificates are read even when they're invalid — the point is to inspect them — so don't treat a
-successful connection here as a sign the server is safe.
+Certificates are read even when invalid, so a successful connection doesn't mean the server is safe.
 
 ### Certificate Store
 
 *Dev Tools → Certificate Store*
 
-Browse installed certificates without `certmgr.msc`'s narrow columns and confusing tree. Switch
-between Personal, Trusted Root Certification Authorities, Intermediate Certification Authorities,
-and Trusted Publishers, each for either the current user or the local machine.
+Browse installed certificates without `certmgr.msc`. Switch between Personal, Trusted Root
+Certification Authorities, Intermediate Certification Authorities and Trusted Publishers, for the
+current user or the local machine.
 
-- **View details**: subject, issuer, thumbprint, serial number, friendly name, validity dates,
-  whether it has a private key, and its usage.
-- **Export**: saves the public certificate (`.cer`) to a location you choose.
-- **Delete**: removes the certificate. Only certificates in a **Local Machine** store need
-  administrator rights to delete — **Current User** store certificates belong to your own account
-  and can be removed without elevation.
-- **Import…**: adds certificates from a file (`.cer`, `.crt`, `.der`, `.pem`, `.p7b`, or a
-  password-protected `.pfx`/`.p12`). It works in two steps so nothing is trusted blind: first the
-  file is read and every certificate in it is listed — subject, issuer, expiry, thumbprint, and
-  whether it's a certificate authority, self-signed, or carries a private key — and only after you
-  choose a store and confirm is anything added. PEM bundles with several certificates import all of
-  them. A password-protected file asks for its password first; the password is used once and not
-  stored.
+- **View details:** subject, issuer, thumbprint, serial, friendly name, validity, private key and
+  usage.
+- **Export:** saves the public certificate (`.cer`).
+- **Delete:** needs administrator rights only for **Local Machine** stores.
+- **Import…:** adds certificates from `.cer`, `.crt`, `.der`, `.pem`, `.p7b` or a password-protected
+  `.pfx`/`.p12`. It works in two steps so nothing is trusted blind. First the file is read and every
+  certificate is listed (subject, issuer, expiry, thumbprint, and whether it is a CA, self-signed or
+  has a private key). Only after you pick a store and confirm is anything added. PEM bundles import
+  every certificate. A protected file asks for its password first, which is used once and not stored.
 
-  Importing into a **Trusted Root Certification Authorities** store makes Windows trust that
-  authority for everything — for your account, or for every user if it's the Local Machine store — so
-  the dialog says so in red and you should check the thumbprint against the one you were given.
-  Windows itself also shows a confirmation when you add a root certificate to your own account.
-  Importing into any **Local Machine** store needs administrator rights.
+  Importing into **Trusted Root Certification Authorities** makes Windows trust that authority for
+  everything, for your account or for all users in the Local Machine store. The dialog says so in
+  red, so check the thumbprint against the one you were given. Windows also shows its own
+  confirmation for a root certificate in your account. Any **Local Machine** store needs
+  administrator rights.
 
 ---
 
 ## 4. Using the terminal UI (zagzig-tui)
 
-Launch it from a terminal: `.\zagzig-tui.exe` (Windows) or `./zagzig-tui` (Linux). It opens a
-full-screen menu on the left and the selected screen's content on the right, with a one-line status
-bar at the bottom showing keybindings relevant to wherever you currently are.
+Run `.\zagzig-tui.exe` (Windows) or `./zagzig-tui` (Linux). It opens a full-screen menu on the left,
+the selected screen on the right, and a status bar with the keys that apply.
 
 ### Global keys (menu focused)
 
@@ -766,55 +636,46 @@ bar at the bottom showing keybindings relevant to wherever you currently are.
 | `Enter`, `Tab`, `→`, or `l` | Open the selected section |
 | `Esc` (inside a section) | Back to the menu |
 | `q` or `Esc` (in the menu) | Quit |
-| `u` | Install an available update, or retry after an error (see below) |
+| `u` | Install an available update, or retry after an error |
 | `r` | Restart after an update has installed |
 
 ### Screens
 
-- **Dashboard** — a summary: how many DNS monitors are running, how many DNS server groups were
-  last read, and your last connection test result.
-- **Connection Test** — type a host and press Enter to ping it 4 times; results and a short
-  history are shown inline.
-- **DNS Servers** — read-only view of DNS servers per adapter/link (Windows: parsed from
-  `ipconfig /all`; Linux: `resolvectl status` when available — most modern distros — falling back
-  to `/etc/resolv.conf` otherwise, since on a systemd-resolved system that file only points at a
-  local stub resolver, not the real servers). Press `r` to refresh.
-- **DNS Monitor** — `Tab`/`Shift+Tab` to move between the hostname field, server field, interval
-  selector, and the monitor list; `←`/`→` change the interval while it's focused; `Enter` adds a
-  monitor from the form, or starts/stops the selected one from the list; `x` removes the selected
-  monitor; `c` clears its log.
+- **Dashboard:** running DNS monitors, DNS server groups last read, and your last connection test.
+- **Connection Test:** type a host and press Enter to ping it 4 times. Results and a short history
+  show inline.
+- **DNS Servers:** a read-only view per adapter. Windows parses `ipconfig /all`. Linux uses
+  `resolvectl status` when available, else `/etc/resolv.conf`, which on systemd-resolved only points
+  at a local stub. Press `r` to refresh.
+- **DNS Monitor:** `Tab`/`Shift+Tab` moves between hostname, server, interval and the monitor list.
+  `←`/`→` change the interval. `Enter` adds a monitor from the form, or starts or stops the selected
+  one. `x` removes it and `c` clears its log.
 
 ### Linux-specific notes
 
-Reading raw ICMP pings needs elevated permissions on Linux — if Connection Test reports permission
-denied, either run as root, grant the binary `CAP_NET_RAW`, or allow unprivileged ping sockets with
-`sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"`. On Windows, the equivalent situation
-(rare) would ask you to run the terminal as Administrator instead.
+Raw ICMP pings need elevated permissions on Linux. If Connection Test reports permission denied, run
+as root, grant the binary `CAP_NET_RAW`, or allow unprivileged ping with
+`sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"`.
 
 ---
 
 ## 5. Staying up to date
 
-Both apps check this repo's latest GitHub release on startup, again automatically every hour in
-the background, and any time you ask them to.
+Both apps check the latest GitHub release at startup, every hour in the background, and on demand.
+Only published releases count, since drafts are ignored and installers can take a few minutes to
+upload.
 
-**Desktop app**: the sidebar footer always has an update control. Most of the time it reads
-"Check for updates" — click it to check on demand (you'll get a toast either way: "You're up to
-date (vX.Y.Z)", naming the version you're running, or "Couldn't check for updates" followed by the
-actual reason). A release only counts once it's published on GitHub — drafts are ignored, and the
-installers can take a few minutes to finish uploading. When a newer version exists, that same spot turns into a prominent button showing
-the version number; click it to see release notes and an "Install and restart" button, which
-downloads the update, verifies it against a signing key baked into the app (via Tauri's updater
-plugin — cryptographically signed, not just downloaded over HTTPS), installs it, and restarts.
-Background checks (startup and hourly) stay silent unless they find something — no toast spam.
+**Desktop app:** the sidebar footer has an update control. Usually it reads "Check for updates".
+Click it to check, and a toast says "You're up to date (vX.Y.Z)" or "Couldn't check for updates" with
+the reason. When a newer version exists, it becomes a button with the version number. Click it to see
+the release notes and **Install and restart**. The download is verified against a signing key built
+into the app (Tauri's updater, cryptographically signed, not just HTTPS), installed, and the app
+restarts. Background checks stay silent unless they find an update.
 
-**Terminal UI**: press `u` at any time from the menu to check for updates on demand (shown in the
-status bar hint). The status bar shows `update available: vX.Y.Z   u: install and restart` when one
-exists. Press `u` to download and verify it (signed with a separate Ed25519 key via
-[zipsign](https://github.com/Kijewski/zipsign) — a different mechanism from the desktop app's, but
-the same idea: the download is rejected if it isn't signed by the matching key, not just trusted
-because it came from GitHub). Once installed, the bar changes to `updated to vX.Y.Z — r: restart
-now` — press `r` to relaunch.
+**Terminal UI:** press `u` in the menu to check. When an update exists, the status bar shows
+`update available: vX.Y.Z   u: install and restart`. Press `u` to download and verify it (signed with
+a separate Ed25519 key via [zipsign](https://github.com/Kijewski/zipsign), so an unsigned download is
+rejected). Once installed, the bar shows `updated to vX.Y.Z, r: restart now`, and `r` relaunches.
 
 If a check or install fails, the status bar shows the error with a `u: retry` hint.
 
@@ -822,27 +683,24 @@ If a check or install fails, the status bar shows the error with a `u: retry` hi
 
 ## 6. Troubleshooting
 
-**A button is locked with a padlock icon.** That action needs administrator rights your current
-session doesn't have active. Hover it for the specific reason, or see
-[Administrator rights](#administrator-rights).
+**A button is locked with a padlock.** That action needs administrator rights your session doesn't
+have. Hover it for the reason, or see [Administrator rights](#administrator-rights).
 
-**"Not found" for signtool.exe.** It ships with the Windows SDK or Visual Studio Build Tools, not
-Windows itself. Install one of those, or use "Locate signtool.exe" to point at an existing copy
-manually.
+**"Not found" for signtool.exe.** It comes with the Windows SDK or Visual Studio Build Tools. Install
+one, or use "Locate signtool.exe" to point at a copy.
 
-**A DNS Monitor entry keeps failing to resolve.** Check the server field — if you specified one and
-it's unreachable or doesn't serve that record, resolution will fail even though the hostname itself
-is valid. Leave it blank to fall back to your system's default resolver.
+**A DNS Monitor entry keeps failing.** Check the server field. A server you named may be unreachable
+or not serve that record. Leave it blank to use the system resolver.
 
-**NRPT "New rule" doesn't seem to do anything.** That's expected right now — see the note under
-[NRPT Rules](#nrpt-rules) above. Only removing an existing rule is currently wired up to Windows.
+**NRPT "New rule" does nothing.** Expected for now, see [NRPT Rules](#nrpt-rules). Only removing a
+rule is wired to Windows.
 
 **The TUI reports a permission error on Connection Test (Linux).** See
-[Linux-specific notes](#linux-specific-notes) above.
+[Linux-specific notes](#linux-specific-notes).
 
-**An update fails to verify/install.** Retry with `u` (TUI) or reopen the update dialog (desktop) —
-transient network issues during download are the most common cause. If it persists, download the
-release directly from GitHub instead and check it against `checksums.txt`.
+**An update fails to verify or install.** Retry with `u` (TUI) or reopen the update dialog (desktop).
+A network hiccup during download is the usual cause. If it persists, download the release from
+GitHub and check it against `checksums.txt`.
 
 ---
 
@@ -850,4 +708,4 @@ release directly from GitHub instead and check it against `checksums.txt`.
 
 - Issues and questions: `github.com/VladRafli/zagzig-tools/issues`
 - Project overview and technical details: [`README.md`](../README.md) in the repository root
-- License: MIT — see [`LICENSE`](../LICENSE)
+- License: MIT, see [`LICENSE`](../LICENSE)

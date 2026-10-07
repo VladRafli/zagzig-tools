@@ -15,7 +15,7 @@ import { useNetworkRoutes } from "@/features/routing/use-network-routes";
 import { useDnsSettings } from "@/features/dns/use-dns-settings";
 import { CurrentUserCard } from "@/features/user/current-user-card";
 import { AdminAlertCard } from "@/features/dashboard/admin-alert-card";
-import type { NavId } from "@/lib/nav";
+import { navGroups, type NavId } from "@/lib/nav";
 
 function nrptSummary(
   t: TFunction,
@@ -165,6 +165,30 @@ export function DashboardPage({
           </CardContent>
         </Card>
       </div>
+
+      {navGroups.map((group) => {
+        const items = group.items.filter((item) => item.id !== "dashboard");
+        return (
+          <section key={group.labelKey} className="flex flex-col gap-3">
+            <h2 className="text-sm font-medium text-muted-foreground">
+              {t(group.labelKey)}
+            </h2>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+              {items.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => onNavigate(item.id)}
+                  className="flex flex-col items-center gap-2 rounded-lg border bg-card p-4 text-center text-sm transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
+                >
+                  <item.icon className="size-6 text-muted-foreground" />
+                  <span>{t(item.labelKey)}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        );
+      })}
     </div>
   );
 }

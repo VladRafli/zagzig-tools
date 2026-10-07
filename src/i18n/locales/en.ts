@@ -56,6 +56,7 @@ const en = {
   },
   nav: {
     overview: "Overview",
+    backToDashboard: "Dashboard",
     network: "Network",
     system: "System",
     firewall: "Firewall",

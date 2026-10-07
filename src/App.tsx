@@ -1,5 +1,8 @@
 import { Suspense, lazy, useState } from "react";
+import { ArrowLeft } from "lucide-react";
 import { useTranslation } from "react-i18next";
+
+import { Button } from "@/components/ui/button";
 
 import {
   Sidebar,
@@ -62,6 +65,14 @@ import { navGroups, type NavId } from "@/lib/nav";
 function App() {
   const { t } = useTranslation();
   const [active, setActive] = useState<NavId>("dashboard");
+  // The dashboard already lists every feature, so the sidebar starts hidden
+  // there and opens when a feature is picked. The user can still toggle it.
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const navigate = (id: NavId) => {
+    setActive(id);
+    setSidebarOpen(id !== "dashboard");
+  };
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
@@ -70,7 +81,11 @@ function App() {
           `fixed inset-y-0` panel, so it's positioned relative to the space
           below the title bar instead of the real viewport (which would put
           it behind the title bar). */}
-      <SidebarProvider className="min-h-0 flex-1 [contain:layout]">
+      <SidebarProvider
+        open={sidebarOpen}
+        onOpenChange={setSidebarOpen}
+        className="min-h-0 flex-1 [contain:layout]"
+      >
         {/* h-full overrides the library's default h-svh — svh is a
             viewport-relative unit that [contain:layout] on the parent can't
             touch (it only rescopes *positioning*, not *sizing*), so the
@@ -91,7 +106,7 @@ function App() {
                       <SidebarMenuItem key={item.id}>
                         <SidebarMenuButton
                           isActive={active === item.id}
-                          onClick={() => setActive(item.id)}
+                          onClick={() => navigate(item.id)}
                         >
                           <item.icon />
                           <span>{t(item.labelKey)}</span>
@@ -121,12 +136,22 @@ function App() {
         <SidebarInset className="min-h-0">
           <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
             <SidebarTrigger />
+            {active !== "dashboard" && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => navigate("dashboard")}
+              >
+                <ArrowLeft />
+                {t("nav.backToDashboard")}
+              </Button>
+            )}
             <div className="ml-auto">
               <AdminStatusBadge />
             </div>
           </header>
           <main className="min-h-0 flex-1 overflow-y-auto p-6">
-            {active === "dashboard" && <DashboardPage onNavigate={setActive} />}
+            {active === "dashboard" && <DashboardPage onNavigate={navigate} />}
             {active === "languages" && <LanguagesPage />}
             {active === "manual" && (
               <Suspense fallback={null}>
