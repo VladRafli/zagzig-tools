@@ -45,31 +45,14 @@ import { AdminRequiredTooltip } from "@/components/admin-required-tooltip";
 import { formatRelativeTime } from "@/lib/relative-time";
 import { useIsAdministrator } from "@/lib/use-is-administrator";
 
-interface NrptRule {
-  id: string;
-  namespace: string;
-  servers: string[];
-  comment: string;
-  nameEncoding: string;
-  dnsSecEnabled: boolean;
-  dnsSecValidationRequired: boolean;
-  dnsSecQueryIpsecEncryption: string;
-  dnsSecQueryIpsecRequired: boolean;
-  directAccessEnabled: boolean;
-  directAccessDnsServers: string[];
-  directAccessProxyName: string;
-  directAccessProxyType: string;
-  directAccessQueryIpsecEncryption: string;
-  directAccessQueryIpsecRequired: boolean;
-  ipsecCaRestriction: string;
-}
-
 const NAME_ENCODING_OPTIONS = [
   "Disable",
   "Utf8WithMapping",
   "Utf8WithoutMapping",
   "Punycode",
 ] as const;
+
+const IPSEC_ENCRYPTION_OPTIONS = ["None", "Low", "Medium", "High"] as const;
 
 const DA_PROXY_TYPE_OPTIONS = ["NoProxy", "UseDefault", "UseProxyName"] as const;
 
@@ -293,12 +276,16 @@ function parseServers(raw: string): string[] {
 
 function NewRuleForm({
   t,
-  onAdd,
+  isAdministrator,
+  onAdded,
 }: {
   t: TFunction;
-  onAdd: (rule: NrptRule) => void;
+  isAdministrator: boolean;
+  onAdded: () => void;
 }) {
   const [form, setForm] = useState<NewRuleFormState>(emptyNewRuleForm);
+  const [adding, setAdding] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   function update<K extends keyof NewRuleFormState>(
     key: K,
@@ -310,28 +297,43 @@ function NewRuleForm({
   const servers = parseServers(form.servers);
   const canAdd = form.namespace.trim().length > 0 && servers.length > 0;
 
-  function addRule() {
-    if (!canAdd) return;
-    onAdd({
-      id: crypto.randomUUID(),
-      namespace: form.namespace.trim(),
-      servers,
-      comment: form.comment.trim(),
-      nameEncoding: form.nameEncoding,
-      dnsSecEnabled: form.dnsSecEnabled,
-      dnsSecValidationRequired: form.dnsSecValidationRequired,
-      dnsSecQueryIpsecEncryption: form.dnsSecQueryIpsecEncryption.trim(),
-      dnsSecQueryIpsecRequired: form.dnsSecQueryIpsecRequired,
-      directAccessEnabled: form.directAccessEnabled,
-      directAccessDnsServers: parseServers(form.directAccessDnsServers),
-      directAccessProxyName: form.directAccessProxyName.trim(),
-      directAccessProxyType: form.directAccessProxyType,
-      directAccessQueryIpsecEncryption:
-        form.directAccessQueryIpsecEncryption.trim(),
-      directAccessQueryIpsecRequired: form.directAccessQueryIpsecRequired,
-      ipsecCaRestriction: form.ipsecCaRestriction.trim(),
-    });
-    setForm(emptyNewRuleForm());
+  async function addRule() {
+    if (!canAdd || adding) return;
+    setAdding(true);
+    setError(null);
+    try {
+      await invoke("add_nrpt_rule", {
+        spec: {
+          namespace: form.namespace.trim(),
+          nameServers: servers,
+          comment: form.comment.trim(),
+          nameEncoding: form.nameEncoding,
+          dnsSecEnabled: form.dnsSecEnabled,
+          dnsSecValidationRequired:
+            form.dnsSecEnabled && form.dnsSecValidationRequired,
+          dnsSecQueryIpsecEncryption: form.dnsSecEnabled
+            ? form.dnsSecQueryIpsecEncryption
+            : "",
+          dnsSecQueryIpsecRequired:
+            form.dnsSecEnabled && form.dnsSecQueryIpsecRequired,
+          directAccessEnabled: form.directAccessEnabled,
+          directAccessDnsServers: parseServers(form.directAccessDnsServers),
+          directAccessProxyName: form.directAccessProxyName.trim(),
+          directAccessProxyType: form.directAccessProxyType,
+          directAccessQueryIpsecEncryption:
+            form.directAccessQueryIpsecEncryption,
+          directAccessQueryIpsecRequired: form.directAccessQueryIpsecRequired,
+          ipsecCaRestriction: form.ipsecCaRestriction.trim(),
+        },
+      });
+      toast.success(t("nrpt.added", { namespace: form.namespace.trim() }));
+      setForm(emptyNewRuleForm());
+      onAdded();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAdding(false);
+    }
   }
 
   return (
@@ -423,6 +425,7 @@ function NewRuleForm({
               </Label>
               <Switch
                 id="dnsSecValidationRequired"
+                disabled={!form.dnsSecEnabled}
                 checked={form.dnsSecValidationRequired}
                 onCheckedChange={(checked) =>
                   update("dnsSecValidationRequired", checked)
@@ -435,6 +438,7 @@ function NewRuleForm({
               </Label>
               <Switch
                 id="dnsSecQueryIpsecRequired"
+                disabled={!form.dnsSecEnabled}
                 checked={form.dnsSecQueryIpsecRequired}
                 onCheckedChange={(checked) =>
                   update("dnsSecQueryIpsecRequired", checked)
@@ -445,13 +449,24 @@ function NewRuleForm({
               <Label htmlFor="dnsSecQueryIpsecEncryption">
                 {t("nrpt.fields.dnsSecQueryIpsecEncryption")}
               </Label>
-              <Input
-                id="dnsSecQueryIpsecEncryption"
-                value={form.dnsSecQueryIpsecEncryption}
-                onChange={(e) =>
-                  update("dnsSecQueryIpsecEncryption", e.currentTarget.value)
+              <Select
+                value={form.dnsSecQueryIpsecEncryption || "unset"}
+                onValueChange={(value) =>
+                  update("dnsSecQueryIpsecEncryption", value === "unset" ? "" : (value as string))
                 }
-              />
+              >
+                <SelectTrigger id="dnsSecQueryIpsecEncryption" className="w-full" disabled={!form.dnsSecEnabled}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="unset">{t("nrpt.notSet")}</SelectItem>
+                  {IPSEC_ENCRYPTION_OPTIONS.map((option) => (
+                    <SelectItem key={option} value={option}>
+                      {option}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             <div className="flex items-center justify-between gap-2 sm:col-span-2">
@@ -527,25 +542,39 @@ function NewRuleForm({
               <Label htmlFor="directAccessQueryIpsecEncryption">
                 {t("nrpt.fields.directAccessQueryIpsecEncryption")}
               </Label>
-              <Input
-                id="directAccessQueryIpsecEncryption"
-                value={form.directAccessQueryIpsecEncryption}
-                onChange={(e) =>
-                  update(
-                    "directAccessQueryIpsecEncryption",
-                    e.currentTarget.value,
-                  )
+              <Select
+                value={form.directAccessQueryIpsecEncryption || "unset"}
+                onValueChange={(value) =>
+                  update("directAccessQueryIpsecEncryption", value === "unset" ? "" : (value as string))
                 }
-              />
+              >
+                <SelectTrigger id="directAccessQueryIpsecEncryption" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="unset">{t("nrpt.notSet")}</SelectItem>
+                  {IPSEC_ENCRYPTION_OPTIONS.map((option) => (
+                    <SelectItem key={option} value={option}>
+                      {option}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
         </CollapsibleDetails>
 
+        {error && <p className="text-sm text-destructive">{error}</p>}
         <div>
-          <Button onClick={addRule} disabled={!canAdd}>
-            <Plus />
-            {t("nrpt.addRule")}
-          </Button>
+          <AdminRequiredTooltip locked={!isAdministrator}>
+            <Button
+              onClick={addRule}
+              disabled={!canAdd || adding || !isAdministrator}
+            >
+              {adding ? <Loader2 className="animate-spin" /> : isAdministrator ? <Plus /> : <Lock />}
+              {adding ? t("nrpt.adding") : t("nrpt.addRule")}
+            </Button>
+          </AdminRequiredTooltip>
         </div>
       </CardContent>
     </Card>
@@ -556,16 +585,6 @@ export function NrptRulesPage() {
   const { t } = useTranslation();
   const systemRules = useSystemNrptRules();
   const { isAdministrator } = useIsAdministrator();
-  const [rules, setRules] = useState<NrptRule[]>([]);
-
-  function addRule(rule: NrptRule) {
-    setRules((prev) => [...prev, rule]);
-  }
-
-  function removeRule(id: string) {
-    setRules((prev) => prev.filter((rule) => rule.id !== id));
-  }
-
   return (
     <div className="flex flex-col gap-6">
       <div>
@@ -632,47 +651,12 @@ export function NrptRulesPage() {
         ))}
       </div>
 
-      <NewRuleForm t={t} onAdd={addRule} />
+      <NewRuleForm
+        t={t}
+        isAdministrator={isAdministrator}
+        onAdded={systemRules.refresh}
+      />
 
-      <div className="flex flex-col gap-3">
-        <h2 className="text-sm font-medium text-muted-foreground">
-          {t("nrpt.pendingRules")}
-        </h2>
-        {rules.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            {t("nrpt.noRulesYet")}
-          </p>
-        ) : (
-          rules.map((rule) => (
-            <Card key={rule.id}>
-              <CardContent className="flex items-start justify-between gap-4">
-                <div className="flex flex-col gap-2">
-                  <span className="font-medium">{rule.namespace}</span>
-                  <div className="flex flex-wrap gap-1.5">
-                    {rule.servers.map((server) => (
-                      <Badge key={server} variant="secondary">
-                        {server}
-                      </Badge>
-                    ))}
-                  </div>
-                  {rule.comment && (
-                    <span className="text-sm text-muted-foreground">
-                      {rule.comment}
-                    </span>
-                  )}
-                </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => removeRule(rule.id)}
-                >
-                  <Trash2 />
-                </Button>
-              </CardContent>
-            </Card>
-          ))
-        )}
-      </div>
     </div>
   );
 }

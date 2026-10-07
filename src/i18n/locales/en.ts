@@ -140,14 +140,15 @@ const en = {
     noneConfigured: "No NRPT rules are configured on this machine.",
     newRule: "New rule",
     newRuleDescription:
-      "Rules are kept in this session only for now — applying them to Windows isn't wired up yet.",
+      "Adds the rule to Windows. It needs administrator approval and applies right away.",
     namespaceLabel: "Namespace",
     namespacePlaceholder: ".corp.example.com",
     dnsServersLabel: "DNS servers",
     dnsServersPlaceholder: "10.0.0.1, 10.0.0.2",
     addRule: "Add rule",
-    pendingRules: "Pending rules (not yet applied)",
-    noRulesYet: "No rules yet.",
+    adding: "Adding…",
+    added: "Added a rule for {{namespace}}.",
+    notSet: "Not set",
     remove: {
       button: "Remove rule",
       title: "Remove this NRPT rule?",

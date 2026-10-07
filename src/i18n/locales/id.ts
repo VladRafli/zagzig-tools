@@ -142,14 +142,15 @@ const id: typeof en = {
     noneConfigured: "Belum ada aturan NRPT yang dikonfigurasi di perangkat ini.",
     newRule: "Aturan baru",
     newRuleDescription:
-      "Aturan hanya disimpan selama sesi ini — penerapannya ke Windows belum tersambung.",
+      "Menambahkan aturan ke Windows. Perlu persetujuan administrator dan langsung berlaku.",
     namespaceLabel: "Namespace",
     namespacePlaceholder: ".corp.example.com",
     dnsServersLabel: "Server DNS",
     dnsServersPlaceholder: "10.0.0.1, 10.0.0.2",
     addRule: "Tambah aturan",
-    pendingRules: "Aturan tertunda (belum diterapkan)",
-    noRulesYet: "Belum ada aturan.",
+    adding: "Menambahkan…",
+    added: "Aturan untuk {{namespace}} ditambahkan.",
+    notSet: "Tidak diatur",
     remove: {
       button: "Hapus aturan",
       title: "Hapus aturan NRPT ini?",

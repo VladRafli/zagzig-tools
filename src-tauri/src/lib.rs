@@ -15,6 +15,7 @@ pub fn run() {
             greet,
             nrpt::get_nrpt_rules,
             nrpt::remove_nrpt_rule,
+            nrpt::add_nrpt_rule,
             user::get_current_user,
             connection::ping_host,
             connection::traceroute_host,
@@ -538,6 +539,230 @@ try {
             Ok(())
         } else {
             Err(parsed.error.unwrap_or_else(|| "Unknown error.".to_string()))
+        }
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct NewNrptRule {
+        pub namespace: String,
+        pub name_servers: Vec<String>,
+        #[serde(default)]
+        pub comment: String,
+        pub name_encoding: String,
+        pub dns_sec_enabled: bool,
+        pub dns_sec_validation_required: bool,
+        pub dns_sec_query_ipsec_required: bool,
+        pub dns_sec_query_ipsec_encryption: String,
+        pub direct_access_enabled: bool,
+        pub direct_access_dns_servers: Vec<String>,
+        pub direct_access_proxy_type: String,
+        pub direct_access_proxy_name: String,
+        pub direct_access_query_ipsec_required: bool,
+        pub direct_access_query_ipsec_encryption: String,
+        pub ipsec_ca_restriction: String,
+    }
+
+    fn plain(value: &str, what: &str, max: usize) -> Result<String, String> {
+        let v = value.trim();
+        if v.len() > max || v.chars().any(|c| c.is_control() || c.is_whitespace() || c == '"' || c == '\'' || c == '`') {
+            return Err(format!("{what} has characters that can't be used."));
+        }
+        Ok(v.to_string())
+    }
+
+    fn one_of(value: &str, allowed: &[&str], what: &str) -> Result<String, String> {
+        let v = value.trim();
+        if v.is_empty() || allowed.contains(&v) {
+            Ok(v.to_string())
+        } else {
+            Err(format!("{what} isn't a recognised value."))
+        }
+    }
+
+    fn servers(list: &[String], what: &str) -> Result<Vec<String>, String> {
+        list.iter()
+            .map(|s| {
+                let s = plain(s, what, 253)?;
+                let hostname = !s.is_empty()
+                    && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_');
+                if s.parse::<std::net::IpAddr>().is_ok() || hostname {
+                    Ok(s)
+                } else {
+                    Err(format!("\"{s}\" isn't an IP address or a host name."))
+                }
+            })
+            .collect()
+    }
+
+    // Checks a form and turns it into the JSON the worker reads. Empty text
+    // fields stay empty strings; the worker leaves those parameters out.
+    fn validate_rule(spec: &NewNrptRule) -> Result<serde_json::Value, String> {
+        let namespace = plain(&spec.namespace, "The namespace", 255)?;
+        if namespace.is_empty() {
+            return Err("Enter a namespace, like .corp.example.com.".to_string());
+        }
+        let name_servers = servers(&spec.name_servers, "A DNS server")?;
+        let da_servers = servers(&spec.direct_access_dns_servers, "A DirectAccess DNS server")?;
+        if name_servers.is_empty() && !(spec.direct_access_enabled && !da_servers.is_empty()) {
+            return Err("Enter at least one DNS server.".to_string());
+        }
+        let comment = spec.comment.trim();
+        if comment.len() > 500 || comment.chars().any(char::is_control) {
+            return Err("The comment is too long or has characters that can't be used.".to_string());
+        }
+        let encryption = ["None", "Low", "Medium", "High"];
+        let proxy_name = plain(&spec.direct_access_proxy_name, "The proxy name", 253)?;
+        let proxy_type = one_of(
+            &spec.direct_access_proxy_type,
+            &["NoProxy", "UseDefault", "UseProxyName"],
+            "The proxy type",
+        )?;
+        if proxy_type == "UseProxyName" {
+            let port_ok = proxy_name
+                .rsplit_once(':')
+                .is_some_and(|(host, port)| !host.is_empty() && port.parse::<u16>().is_ok());
+            if !port_ok {
+                return Err("Enter the proxy as name:port, like proxy.corp.example.com:8080.".to_string());
+            }
+        }
+        if !spec.dns_sec_enabled
+            && (spec.dns_sec_validation_required
+                || spec.dns_sec_query_ipsec_required
+                || !spec.dns_sec_query_ipsec_encryption.trim().is_empty())
+        {
+            return Err("Turn on DNSSEC to use the DNSSEC options.".to_string());
+        }
+        Ok(serde_json::json!({
+            "Namespace": namespace,
+            "NameServers": name_servers,
+            "Comment": comment,
+            "NameEncoding": one_of(
+                &spec.name_encoding,
+                &["Disable", "Utf8WithMapping", "Utf8WithoutMapping", "Punycode"],
+                "The name encoding",
+            )?,
+            "DnsSecEnabled": spec.dns_sec_enabled,
+            "DnsSecValidationRequired": spec.dns_sec_validation_required,
+            "DnsSecQueryIpsecRequired": spec.dns_sec_query_ipsec_required,
+            "DnsSecQueryIpsecEncryption": one_of(&spec.dns_sec_query_ipsec_encryption, &encryption, "The DNSSEC IPsec encryption")?,
+            "DirectAccessEnabled": spec.direct_access_enabled,
+            "DirectAccessDnsServers": da_servers,
+            "DirectAccessProxyType": proxy_type,
+            "DirectAccessProxyName": proxy_name,
+            "DirectAccessQueryIpsecRequired": spec.direct_access_query_ipsec_required,
+            "DirectAccessQueryIpsecEncryption": one_of(&spec.direct_access_query_ipsec_encryption, &encryption, "The DirectAccess IPsec encryption")?,
+            "IpsecCaRestriction": spec.ipsec_ca_restriction.trim(),
+        }))
+    }
+
+    // Add-DnsClientNrptRule names these parameters differently from the
+    // properties Get-DnsClientNrptRule returns (DnsSecEnable, DAEnable,
+    // IPsecTrustAuthority, ...), so the mapping is spelled out here.
+    fn add_worker() -> String {
+        crate::elevated_json::worker(
+            r#"    $p = @{ Namespace = @([string]$req.Namespace) }
+    if (@($req.NameServers).Count) { $p.NameServers = @($req.NameServers | ForEach-Object { [string]$_ }) }
+    if ($req.Comment) { $p.Comment = [string]$req.Comment }
+    if ($req.NameEncoding) { $p.NameEncoding = [string]$req.NameEncoding }
+    if ($req.DnsSecEnabled) { $p.DnsSecEnable = $true }
+    if ($req.DnsSecValidationRequired) { $p.DnsSecValidationRequired = $true }
+    if ($req.DnsSecQueryIpsecRequired) { $p.DnsSecIPsecRequired = $true }
+    if ($req.DnsSecQueryIpsecEncryption) { $p.DnsSecIPsecEncryptionType = [string]$req.DnsSecQueryIpsecEncryption }
+    if ($req.DirectAccessEnabled) { $p.DAEnable = $true }
+    if (@($req.DirectAccessDnsServers).Count) { $p.DANameServers = @($req.DirectAccessDnsServers | ForEach-Object { [string]$_ }) }
+    if ($req.DirectAccessProxyType) { $p.DAProxyType = [string]$req.DirectAccessProxyType }
+    if ($req.DirectAccessProxyName) { $p.DAProxyServerName = [string]$req.DirectAccessProxyName }
+    if ($req.DirectAccessQueryIpsecRequired) { $p.DAIPsecRequired = $true }
+    if ($req.DirectAccessQueryIpsecEncryption) { $p.DAIPsecEncryptionType = [string]$req.DirectAccessQueryIpsecEncryption }
+    if ($req.IpsecCaRestriction) { $p.IPsecTrustAuthority = [string]$req.IpsecCaRestriction }
+    Add-DnsClientNrptRule @p -ErrorAction Stop | Out-Null"#,
+        )
+    }
+
+    #[tauri::command]
+    pub async fn add_nrpt_rule(spec: NewNrptRule) -> Result<(), String> {
+        let payload = validate_rule(&spec)?.to_string();
+        crate::elevated_json::run(&add_worker(), &payload).await
+    }
+
+    #[cfg(test)]
+    mod add_tests {
+        use super::*;
+
+        fn spec() -> NewNrptRule {
+            NewNrptRule {
+                namespace: ".corp.example.com".into(),
+                name_servers: vec!["10.0.0.1".into(), "dns.corp.example.com".into()],
+                comment: "".into(),
+                name_encoding: "Disable".into(),
+                dns_sec_enabled: false,
+                dns_sec_validation_required: false,
+                dns_sec_query_ipsec_required: false,
+                dns_sec_query_ipsec_encryption: "".into(),
+                direct_access_enabled: false,
+                direct_access_dns_servers: vec![],
+                direct_access_proxy_type: "NoProxy".into(),
+                direct_access_proxy_name: "".into(),
+                direct_access_query_ipsec_required: false,
+                direct_access_query_ipsec_encryption: "".into(),
+                ipsec_ca_restriction: "".into(),
+            }
+        }
+
+        #[test]
+        fn accepts_a_good_rule() {
+            let json = validate_rule(&spec()).unwrap();
+            assert_eq!(json["Namespace"], ".corp.example.com");
+            assert_eq!(json["NameServers"], serde_json::json!(["10.0.0.1", "dns.corp.example.com"]));
+        }
+
+        #[test]
+        fn rejects_bad_rules() {
+            let bad = |f: &dyn Fn(&mut NewNrptRule)| {
+                let mut s = spec();
+                f(&mut s);
+                assert!(validate_rule(&s).is_err());
+            };
+            bad(&|s| s.namespace = "  ".into());
+            bad(&|s| s.namespace = "a b".into());
+            bad(&|s| s.namespace = "x\"; calc; \"".into());
+            bad(&|s| s.name_servers = vec![]);
+            bad(&|s| s.name_servers = vec!["10.0.0.1; calc".into()]);
+            bad(&|s| s.name_encoding = "Rot13".into());
+            bad(&|s| s.dns_sec_query_ipsec_encryption = "Maximum".into());
+            bad(&|s| s.direct_access_proxy_type = "UseProxyName".into());
+            bad(&|s| {
+                s.direct_access_proxy_type = "UseProxyName".into();
+                s.direct_access_proxy_name = "proxy.example.com".into();
+            });
+            bad(&|s| s.dns_sec_validation_required = true);
+        }
+
+        #[test]
+        fn direct_access_servers_can_stand_in() {
+            let mut s = spec();
+            s.name_servers = vec![];
+            assert!(validate_rule(&s).is_err());
+            s.direct_access_enabled = true;
+            s.direct_access_dns_servers = vec!["fd00::1".into()];
+            assert!(validate_rule(&s).is_ok());
+        }
+
+        #[test]
+        fn worker_parses_and_uses_real_parameter_names() {
+            assert_eq!(crate::powershell_syntax_errors(&add_worker()), Vec::<String>::new());
+            let out = std::process::Command::new("powershell")
+                .args(["-NoProfile", "-Command", "(Get-Command Add-DnsClientNrptRule).Parameters.Keys -join ' '"])
+                .output();
+            if let Ok(out) = out {
+                let keys = String::from_utf8_lossy(&out.stdout).to_string();
+                if keys.contains("Namespace") {
+                    for name in add_worker().split("$p.").skip(1).map(|s| s.split(|c: char| !c.is_alphanumeric()).next().unwrap_or("")) {
+                        assert!(keys.split_whitespace().any(|k| k == name), "no such parameter: {name}");
+                    }
+                }
+            }
         }
     }
 }
