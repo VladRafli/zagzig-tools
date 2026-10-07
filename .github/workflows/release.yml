@@ -47,24 +47,25 @@ jobs:
           releaseName: "zagzig-tools ${{ github.ref_name }}"
           # NOTE: this is a static, per-release description — update it
           # before tagging each release (it's plain text, not generated from
-          # commits/changelog). What's below describes v0.11.0 specifically.
+          # commits/changelog). What's below describes v0.12.0 specifically.
           releaseBody: |
-            ## What's new in v0.11.0
+            ## What's new in v0.12.0
 
-            - **TLS Inspector** (new page under Dev Tools): connect to a host and port and see its
-              certificate, the chain behind it, when it expires, and whether Windows trusts it —
-              handy for working out why a tool rejects a local or internal HTTPS service.
-            - **Wake-on-LAN** (new page under Network): turn on a PC that's off or asleep with a
-              magic packet. Saved devices, sent from your physical adapters, with an optional check
-              that the PC came up. The other PC needs no software.
-            - **Port Scanner** (new page under Network): a simple TCP connect scan of one host,
-              with presets and custom ports.
-            - **Startup** (new page under System): see what starts at sign-in and switch entries
-              off and on — the same switch Task Manager uses.
-            - **Fixed**: accented and non-Latin text from Windows (localized event messages, Wi-Fi
-              names, file paths) could arrive damaged, and elevated actions could corrupt non-ASCII
-              values, such as an accented path saved into a system environment variable. Text now
-              stays intact end to end.
+            - **Diagnostic Report** (new page under System): one Markdown report of the PC's
+              network setup for a support ticket. Pick the sections, then copy or save it.
+              Computer and user names and MAC addresses are hidden by default, with an optional
+              IPv4 mask.
+            - **Certificate import**: add a certificate from a DER, PEM (including bundles), P7B
+              or password-protected PFX file. You review what's in the file first and choose the
+              store.
+            - **Firewall rules**: create allow/block rules for a port, also straight from a row
+              on the Ports page. Only rules made by this app can be deleted from it.
+            - **Hosts file backups**: a copy is saved before every change; compare with the
+              current file and restore any of the newest 30.
+            - **Saved hosts**: keep hosts in a list shared by Connection Test, Port Scanner and
+              TLS Inspector.
+            - **Fixed**: PEM bundles imported only their first certificate, and a harmless Event
+              Log message was shown as an error.
 
             See the assets below to download this release.
 
