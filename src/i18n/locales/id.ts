@@ -98,7 +98,10 @@ const id: typeof en = {
     title: "Dasbor",
     subtitle:
       "Pengaturan dan alat Windows yang tidak tersedia di Settings atau Control Panel.",
-    open: "Buka",
+    starred: "Berbintang",
+    starredEmpty: "Beri bintang pada fitur (bintang di ikonnya) agar tampil di sini dan di bagian atas sidebar.",
+    star: "Beri bintang {{name}}",
+    unstar: "Hapus {{name}} dari berbintang",
     adminAlert: {
       title: "Berjalan sebagai pengguna standar",
       description:
@@ -106,40 +109,6 @@ const id: typeof en = {
       action: "Mulai ulang sebagai administrator",
       relaunching: "Memulai ulang…",
       error: "Gagal memulai ulang sebagai administrator: {{error}}",
-    },
-    nrpt: {
-      title: "Aturan NRPT",
-      description:
-        "Mengarahkan kueri DNS untuk suatu namespace ke server tertentu.",
-      checking: "Memeriksa…",
-      couldntRead: "Gagal membaca aturan",
-      noneConfigured: "Belum ada aturan yang dikonfigurasi",
-      configured_one: "{{count}} aturan dikonfigurasi",
-      configured_other: "{{count}} aturan dikonfigurasi",
-    },
-    connectionTest: {
-      title: "Uji Koneksi",
-      description:
-        "Periksa apakah situs atau server dapat dijangkau dan lihat jalur menuju ke sana.",
-    },
-    routing: {
-      title: "Rute Jaringan",
-      description: "Lihat dan kelola tabel routing IP Windows.",
-      checking: "Memeriksa…",
-      couldntRead: "Gagal membaca rute",
-      noneConfigured: "Tidak ada rute ditemukan",
-      configured_one: "{{count}} rute",
-      configured_other: "{{count}} rute",
-    },
-    dns: {
-      title: "Server DNS",
-      description:
-        "Atur server DNS per adapter jaringan — sebanyak yang Anda perlukan.",
-      checking: "Memeriksa…",
-      couldntRead: "Gagal membaca pengaturan DNS",
-      noneConfigured: "Tidak ada adapter ditemukan",
-      configured_one: "{{count}} adapter",
-      configured_other: "{{count}} adapter",
     },
   },
   user: {

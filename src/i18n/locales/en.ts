@@ -96,7 +96,10 @@ const en = {
     title: "Dashboard",
     subtitle:
       "Windows settings and tools that Settings and Control Panel won't give you.",
-    open: "Open",
+    starred: "Starred",
+    starredEmpty: "Star a feature (the star on its icon) to keep it here and at the top of the sidebar.",
+    star: "Star {{name}}",
+    unstar: "Remove {{name}} from starred",
     adminAlert: {
       title: "Running as a standard user",
       description:
@@ -104,38 +107,6 @@ const en = {
       action: "Restart as administrator",
       relaunching: "Restarting…",
       error: "Couldn't restart as administrator: {{error}}",
-    },
-    nrpt: {
-      title: "NRPT Rules",
-      description: "Route DNS queries for a namespace to specific servers.",
-      checking: "Checking…",
-      couldntRead: "Couldn't read rules",
-      noneConfigured: "No rules configured",
-      configured_one: "{{count}} rule configured",
-      configured_other: "{{count}} rules configured",
-    },
-    connectionTest: {
-      title: "Connection Test",
-      description:
-        "Check if a website or server is reachable and see the path to it.",
-    },
-    routing: {
-      title: "Network Routes",
-      description: "View and manage the Windows IP routing table.",
-      checking: "Checking…",
-      couldntRead: "Couldn't read routes",
-      noneConfigured: "No routes found",
-      configured_one: "{{count}} route",
-      configured_other: "{{count}} routes",
-    },
-    dns: {
-      title: "DNS Servers",
-      description: "Set DNS servers per network adapter — as many as you need.",
-      checking: "Checking…",
-      couldntRead: "Couldn't read DNS settings",
-      noneConfigured: "No adapters found",
-      configured_one: "{{count}} adapter",
-      configured_other: "{{count}} adapters",
     },
   },
   user: {

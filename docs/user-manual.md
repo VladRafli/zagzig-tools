@@ -59,8 +59,8 @@ This only checks that the download is complete. It isn't a signature. See
 
 ## 2. Getting started with the desktop app
 
-The app opens on the **Dashboard**, a grid of cards with one per feature, grouped as **Overview**,
-**Network**, **System** and **Dev Tools**. Click a card to open that page. The sidebar is hidden on
+The app opens on the **Dashboard**, a grid of icons, one per feature, grouped as **Overview**,
+**Network**, **System** and **Dev Tools**. Click an icon to open that page. The sidebar is hidden on
 the Dashboard and opens when you pick a feature. The **Dashboard** button in the top bar goes back,
 and the button at its left toggles the sidebar (`Ctrl+B` too). The top bar also shows your
 administrator status. The sidebar footer has the update control, theme switcher and language
@@ -131,9 +131,12 @@ Good to know:
 ### Dashboard
 
 The landing page. It shows your signed-in user (on a domain-joined PC, also title, department and
-manager from LDAP), the administrator banner when it applies, and summary cards for NRPT Rules,
-Connection Test, Network Routes and DNS Servers. Below them is a small card for every feature, grouped
-like the sidebar. Click one to open it.
+manager from LDAP) and the administrator banner when it applies. Below is a small icon for every
+feature, grouped like the sidebar. Click one to open it.
+
+**Starred:** hover an icon and click its star to keep that feature in the **Starred** row at the top
+of the Dashboard and in a **Starred** group at the top of the sidebar. The sidebar also shows a star on
+hover for each item. Click a filled star to remove it. Stars are stored on this PC only.
 
 ### NRPT Rules
 

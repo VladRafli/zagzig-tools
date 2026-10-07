@@ -1,5 +1,5 @@
 import { Suspense, lazy, useState } from "react";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Star } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import {
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
+  SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
@@ -60,18 +61,50 @@ const ManualPage = lazy(() =>
 import { NrptRulesPage } from "@/features/nrpt/nrpt-rules-page";
 import { ProxyPage } from "@/features/proxy/proxy-page";
 import { RoutingPage } from "@/features/routing/routing-page";
-import { navGroups, type NavId } from "@/lib/nav";
+import { navGroups, type NavId, type NavItem } from "@/lib/nav";
+import { toggleStarred, useStarred } from "@/lib/use-starred";
 
 function App() {
   const { t } = useTranslation();
   const [active, setActive] = useState<NavId>("dashboard");
   // The dashboard already lists every feature, so the sidebar starts hidden
   // there and opens when a feature is picked. The user can still toggle it.
+  const starred = useStarred();
+  const starredItems = starred
+    .map((id) => navGroups.flatMap((g) => g.items).find((i) => i.id === id))
+    .filter((i): i is NavItem => !!i);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const navigate = (id: NavId) => {
     setActive(id);
     setSidebarOpen(id !== "dashboard");
+  };
+
+  const renderItem = (item: NavItem, keyPrefix = "") => {
+    const isStarred = starred.includes(item.id);
+    const label = t(item.labelKey);
+    const starLabel = t(isStarred ? "dashboard.unstar" : "dashboard.star", { name: label });
+    return (
+      <SidebarMenuItem key={keyPrefix + item.id}>
+        <SidebarMenuButton
+          isActive={active === item.id}
+          onClick={() => navigate(item.id)}
+        >
+          <item.icon />
+          <span>{label}</span>
+        </SidebarMenuButton>
+        {item.id !== "dashboard" && (
+          <SidebarMenuAction
+            showOnHover={!isStarred}
+            aria-label={starLabel}
+            title={starLabel}
+            onClick={() => toggleStarred(item.id)}
+          >
+            <Star className={isStarred ? "fill-current text-yellow-500" : ""} />
+          </SidebarMenuAction>
+        )}
+      </SidebarMenuItem>
+    );
   };
 
   return (
@@ -97,22 +130,22 @@ function App() {
             <span className="px-2 text-sm font-semibold">{t("app.title")}</span>
           </SidebarHeader>
           <SidebarContent>
+            {starredItems.length > 0 && (
+              <SidebarGroup>
+                <SidebarGroupLabel>{t("dashboard.starred")}</SidebarGroupLabel>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    {starredItems.map((item) => renderItem(item, "starred-"))}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            )}
             {navGroups.map((group) => (
               <SidebarGroup key={group.labelKey}>
                 <SidebarGroupLabel>{t(group.labelKey)}</SidebarGroupLabel>
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    {group.items.map((item) => (
-                      <SidebarMenuItem key={item.id}>
-                        <SidebarMenuButton
-                          isActive={active === item.id}
-                          onClick={() => navigate(item.id)}
-                        >
-                          <item.icon />
-                          <span>{t(item.labelKey)}</span>
-                        </SidebarMenuButton>
-                      </SidebarMenuItem>
-                    ))}
+                    {group.items.map((item) => renderItem(item))}
                   </SidebarMenu>
                 </SidebarGroupContent>
               </SidebarGroup>

@@ -1,53 +1,57 @@
-import { ArrowRight, Network, Radar, Route, Server } from "lucide-react";
+import { Star } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import type { TFunction } from "i18next";
 
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-  CardContent,
-} from "@/components/ui/card";
-import { useSystemNrptRules } from "@/features/nrpt/use-system-nrpt-rules";
-import { useNetworkRoutes } from "@/features/routing/use-network-routes";
-import { useDnsSettings } from "@/features/dns/use-dns-settings";
 import { CurrentUserCard } from "@/features/user/current-user-card";
 import { AdminAlertCard } from "@/features/dashboard/admin-alert-card";
-import { navGroups, type NavId } from "@/lib/nav";
+import { cn } from "@/lib/utils";
+import { navGroups, type NavItem, type NavId } from "@/lib/nav";
+import { toggleStarred, useStarred } from "@/lib/use-starred";
 
-function nrptSummary(
-  t: TFunction,
-  status: "loading" | "ready" | "error",
-  count: number,
-) {
-  if (status === "loading") return t("dashboard.nrpt.checking");
-  if (status === "error") return t("dashboard.nrpt.couldntRead");
-  if (count === 0) return t("dashboard.nrpt.noneConfigured");
-  return t("dashboard.nrpt.configured", { count });
+function FeatureTile({
+  item,
+  starred,
+  onOpen,
+}: {
+  item: NavItem;
+  starred: boolean;
+  onOpen: (id: NavId) => void;
+}) {
+  const { t } = useTranslation();
+  const label = t(item.labelKey);
+  const starLabel = t(starred ? "dashboard.unstar" : "dashboard.star", { name: label });
+  return (
+    <div className="group relative">
+      <button
+        type="button"
+        onClick={() => onOpen(item.id)}
+        className="flex h-24 w-full flex-col items-center gap-1.5 rounded-lg px-1 pt-3 text-center text-xs transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
+      >
+        <item.icon className="size-8 shrink-0 text-muted-foreground group-hover:text-foreground" />
+        <span className="line-clamp-2 leading-tight">{label}</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => toggleStarred(item.id)}
+        aria-pressed={starred}
+        aria-label={starLabel}
+        title={starLabel}
+        className={cn(
+          "absolute top-1 right-1 rounded p-0.5 text-muted-foreground hover:text-foreground focus-visible:opacity-100",
+          starred ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+        )}
+      >
+        <Star className={cn("size-3.5", starred && "fill-current text-yellow-500")} />
+      </button>
+    </div>
+  );
 }
 
-function routingSummary(
-  t: TFunction,
-  status: "loading" | "ready" | "error",
-  count: number,
-) {
-  if (status === "loading") return t("dashboard.routing.checking");
-  if (status === "error") return t("dashboard.routing.couldntRead");
-  if (count === 0) return t("dashboard.routing.noneConfigured");
-  return t("dashboard.routing.configured", { count });
-}
-
-function dnsSummary(
-  t: TFunction,
-  status: "loading" | "ready" | "error",
-  count: number,
-) {
-  if (status === "loading") return t("dashboard.dns.checking");
-  if (status === "error") return t("dashboard.dns.couldntRead");
-  if (count === 0) return t("dashboard.dns.noneConfigured");
-  return t("dashboard.dns.configured", { count });
+function TileGrid({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="grid grid-cols-[repeat(auto-fill,minmax(5.5rem,1fr))] gap-1">
+      {children}
+    </div>
+  );
 }
 
 export function DashboardPage({
@@ -56,9 +60,12 @@ export function DashboardPage({
   onNavigate: (id: NavId) => void;
 }) {
   const { t } = useTranslation();
-  const nrptRules = useSystemNrptRules();
-  const routes = useNetworkRoutes();
-  const dns = useDnsSettings();
+  const starred = useStarred();
+
+  const all = navGroups.flatMap((g) => g.items).filter((i) => i.id !== "dashboard");
+  const starredItems = starred
+    .map((id) => all.find((i) => i.id === id))
+    .filter((i): i is NavItem => !!i);
 
   return (
     <div className="flex flex-col gap-6">
@@ -73,119 +80,38 @@ export function DashboardPage({
 
       <CurrentUserCard />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <Card>
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <Network className="size-4" />
-              <CardTitle>{t("dashboard.nrpt.title")}</CardTitle>
-            </div>
-            <CardDescription>{t("dashboard.nrpt.description")}</CardDescription>
-          </CardHeader>
-          <CardContent className="flex items-center justify-between">
-            <span className="text-sm text-muted-foreground">
-              {nrptSummary(t, nrptRules.status, nrptRules.rules.length)}
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => onNavigate("nrpt-rules")}
-            >
-              {t("dashboard.open")}
-              <ArrowRight />
-            </Button>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <Radar className="size-4" />
-              <CardTitle>{t("dashboard.connectionTest.title")}</CardTitle>
-            </div>
-            <CardDescription>
-              {t("dashboard.connectionTest.description")}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex items-center justify-end">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => onNavigate("connection-test")}
-            >
-              {t("dashboard.open")}
-              <ArrowRight />
-            </Button>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <Route className="size-4" />
-              <CardTitle>{t("dashboard.routing.title")}</CardTitle>
-            </div>
-            <CardDescription>{t("dashboard.routing.description")}</CardDescription>
-          </CardHeader>
-          <CardContent className="flex items-center justify-between">
-            <span className="text-sm text-muted-foreground">
-              {routingSummary(t, routes.status, routes.routes.length)}
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => onNavigate("network-routes")}
-            >
-              {t("dashboard.open")}
-              <ArrowRight />
-            </Button>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <Server className="size-4" />
-              <CardTitle>{t("dashboard.dns.title")}</CardTitle>
-            </div>
-            <CardDescription>{t("dashboard.dns.description")}</CardDescription>
-          </CardHeader>
-          <CardContent className="flex items-center justify-between">
-            <span className="text-sm text-muted-foreground">
-              {dnsSummary(t, dns.status, dns.interfaces.length)}
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => onNavigate("dns-servers")}
-            >
-              {t("dashboard.open")}
-              <ArrowRight />
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
+      <section className="flex flex-col gap-2">
+        <h2 className="text-sm font-medium text-muted-foreground">
+          {t("dashboard.starred")}
+        </h2>
+        {starredItems.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{t("dashboard.starredEmpty")}</p>
+        ) : (
+          <TileGrid>
+            {starredItems.map((item) => (
+              <FeatureTile key={item.id} item={item} starred onOpen={onNavigate} />
+            ))}
+          </TileGrid>
+        )}
+      </section>
 
       {navGroups.map((group) => {
         const items = group.items.filter((item) => item.id !== "dashboard");
         return (
-          <section key={group.labelKey} className="flex flex-col gap-3">
+          <section key={group.labelKey} className="flex flex-col gap-2">
             <h2 className="text-sm font-medium text-muted-foreground">
               {t(group.labelKey)}
             </h2>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+            <TileGrid>
               {items.map((item) => (
-                <button
+                <FeatureTile
                   key={item.id}
-                  type="button"
-                  onClick={() => onNavigate(item.id)}
-                  className="flex flex-col items-center gap-2 rounded-lg border bg-card p-4 text-center text-sm transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
-                >
-                  <item.icon className="size-6 text-muted-foreground" />
-                  <span>{t(item.labelKey)}</span>
-                </button>
+                  item={item}
+                  starred={starred.includes(item.id)}
+                  onOpen={onNavigate}
+                />
               ))}
-            </div>
+            </TileGrid>
           </section>
         );
       })}
