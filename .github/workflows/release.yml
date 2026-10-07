@@ -47,15 +47,15 @@ jobs:
           releaseName: "zagzig-tools ${{ github.ref_name }}"
           # NOTE: this is a static, per-release description — update it
           # before tagging each release (it's plain text, not generated from
-          # commits/changelog). What's below describes v0.13.1 specifically.
+          # commits/changelog). What's below describes v0.14.0 specifically.
           releaseBody: |
-            ## What's new in v0.13.1
+            ## What's new in v0.14.0
 
-            - **Starred features**: hover a feature's icon on the Dashboard or in the sidebar and
-              click its star to keep it in a Starred row on the Dashboard and a Starred group at
-              the top of the sidebar.
-            - **Dashboard**: features are now small desktop-style icons, and the summary cards that
-              repeated features already listed below them are gone.
+            - **NRPT rules can now be created**: the New rule form adds the rule to Windows (one
+              UAC prompt) instead of only keeping it in the session.
+            - **Terminal UI**: new Ports screen (what listens on which port, with the process) and
+              a read-only Hosts File screen, both with scrolling and a text filter.
+            - **Manual**: the PDF is regenerated to match the current built-in manual.
 
             See the assets below to download this release.
 
