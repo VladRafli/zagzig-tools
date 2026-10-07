@@ -57,7 +57,7 @@ app to run elevated all the time.
 ### Terminal UI (`tui/`)
 
 A standalone `ratatui`-based terminal app (`zagzig-tui`) covering a subset of the same
-functionality — Dashboard, Connection Test, DNS Servers, DNS Monitor — for headless boxes,
+functionality — Dashboard, Connection Test, DNS Servers, DNS Monitor, Ports, Hosts File (read only) — for headless boxes,
 SSH sessions, or anyone who'd rather stay in a terminal. It's a separate Rust binary with its own
 `Cargo.toml`, not a Tauri window; see [`tui/`](./tui).
 

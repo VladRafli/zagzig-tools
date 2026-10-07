@@ -11,6 +11,8 @@ pub struct Summary {
     pub monitors_running: usize,
     pub last_connection_test: Option<String>,
     pub dns_server_groups: usize,
+    pub listening_ports: usize,
+    pub host_entries: usize,
 }
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
@@ -21,7 +23,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             "zagzig-tui",
             Style::default().fg(Color::Cyan).add_modifier(ratatui::style::Modifier::BOLD),
         )),
-        Line::from("Cross-platform DNS diagnostics: Connection Test, DNS Servers, DNS Monitor."),
+        Line::from("Cross-platform network diagnostics: Connection Test, DNS, Ports, Hosts File."),
         Line::from(""),
         Line::from(format!(
             "DNS Monitor    {} running / {} total",
@@ -32,6 +34,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             summary.dns_server_groups
         )),
     ];
+    lines.push(Line::from(format!("Ports          {} listening", summary.listening_ports)));
+    lines.push(Line::from(format!("Hosts File     {} active entries", summary.host_entries)));
     if let Some(last) = summary.last_connection_test {
         lines.push(Line::from(format!("Connection Test    last: {last}")));
     } else {

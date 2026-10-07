@@ -146,9 +146,12 @@ The Name Resolution Policy Table, the same rules `Get-DnsClientNrptRule` reports
 queries for a namespace (like `.corp.example.com`) to specific servers. Expand a rule to see every
 field, like DNSSEC, DirectAccess and IPsec settings.
 
-- **Remove** is real and immediate, with one UAC prompt if needed.
-- **New rule** is session only. It is kept in a "Pending rules" list but **not written to Windows**.
-  This is a known limitation.
+- **Remove** is immediate, with one UAC prompt if needed.
+- **New rule** adds the rule to Windows (one UAC prompt, immediate). Enter a namespace and at least
+  one DNS server (IP address or host name), and optionally a comment. **Details** holds the name
+  encoding, DNSSEC options (turn on DNSSEC first), IPsec encryption levels (None, Low, Medium, High),
+  the IPsec CA restriction and DirectAccess settings. A DirectAccess proxy is written as
+  `name:port`. Windows rejects some combinations and its message is shown in the form.
 
 ### Connection Test
 
@@ -653,6 +656,13 @@ the selected screen on the right, and a status bar with the keys that apply.
 - **DNS Monitor:** `Tab`/`Shift+Tab` moves between hostname, server, interval and the monitor list.
   `←`/`→` change the interval. `Enter` adds a monitor from the form, or starts or stops the selected
   one. `x` removes it and `c` clears its log.
+- **Ports:** what listens on which port, with the owning process and PID. Windows reads `netstat`
+  and `tasklist`, Linux reads `ss` (run as root to see other users' processes).
+- **Hosts File:** the active entries of the hosts file, read only (comments are skipped). Edit it in
+  the desktop app.
+
+Ports and Hosts File share the same keys: `↑`/`↓` or `j`/`k` scroll, `PgUp`/`PgDn` jump,
+`/` filters (type, then `Enter`), `c` clears the filter and `r` refreshes.
 
 ### Linux-specific notes
 
@@ -694,9 +704,6 @@ one, or use "Locate signtool.exe" to point at a copy.
 
 **A DNS Monitor entry keeps failing.** Check the server field. A server you named may be unreachable
 or not serve that record. Leave it blank to use the system resolver.
-
-**NRPT "New rule" does nothing.** Expected for now, see [NRPT Rules](#nrpt-rules). Only removing a
-rule is wired to Windows.
 
 **The TUI reports a permission error on Connection Test (Linux).** See
 [Linux-specific notes](#linux-specific-notes).

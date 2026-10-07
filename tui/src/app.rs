@@ -1,7 +1,7 @@
 use crossterm::event::KeyEvent;
 
 use crate::monitor::MonitorEngine;
-use crate::screens::{connection_test, dashboard, dns_monitor, dns_servers};
+use crate::screens::{connection_test, dashboard, dns_monitor, dns_servers, hosts, ports};
 use crate::update::UpdateState;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -10,13 +10,17 @@ pub enum Screen {
     ConnectionTest,
     DnsServers,
     DnsMonitor,
+    Ports,
+    Hosts,
 }
 
-pub const MENU_ITEMS: [(Screen, &str); 4] = [
+pub const MENU_ITEMS: [(Screen, &str); 6] = [
     (Screen::Dashboard, "Dashboard"),
     (Screen::ConnectionTest, "Connection Test"),
     (Screen::DnsServers, "DNS Servers"),
     (Screen::DnsMonitor, "DNS Monitor"),
+    (Screen::Ports, "Ports"),
+    (Screen::Hosts, "Hosts File"),
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -35,6 +39,8 @@ pub struct App {
     pub connection_test: connection_test::State,
     pub dns_servers: dns_servers::State,
     pub dns_monitor: dns_monitor::State,
+    pub ports: ports::State,
+    pub hosts: hosts::State,
     pub update: UpdateState,
 }
 
@@ -51,6 +57,8 @@ impl App {
             connection_test: connection_test::State::default(),
             dns_servers: dns_servers::State::new(),
             dns_monitor: dns_monitor::State::default(),
+            ports: ports::new_state(),
+            hosts: hosts::new_state(),
             update: UpdateState::new(),
         }
     }
@@ -105,6 +113,8 @@ impl App {
             Screen::ConnectionTest => connection_test::on_key(self, key),
             Screen::DnsServers => dns_servers::on_key(self, key),
             Screen::DnsMonitor => dns_monitor::on_key(self, key),
+            Screen::Ports => ports::on_key(self, key),
+            Screen::Hosts => hosts::on_key(self, key),
         }
     }
 
@@ -123,6 +133,8 @@ impl App {
                 Screen::ConnectionTest => connection_test::HINT.to_string(),
                 Screen::DnsServers => dns_servers::HINT.to_string(),
                 Screen::DnsMonitor => dns_monitor::HINT.to_string(),
+                Screen::Ports => self.ports.hint().to_string(),
+                Screen::Hosts => self.hosts.hint().to_string(),
             },
         }
     }
@@ -157,5 +169,7 @@ pub fn render_dashboard_summary(app: &App) -> dashboard::Summary {
         monitors_running: monitors.iter().filter(|m| m.running).count(),
         last_connection_test: app.connection_test.last_summary(),
         dns_server_groups: app.dns_servers.groups_len(),
+        listening_ports: app.ports.len(),
+        host_entries: app.hosts.len(),
     }
 }

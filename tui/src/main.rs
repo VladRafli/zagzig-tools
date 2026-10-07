@@ -1,7 +1,9 @@
 mod app;
 mod dns;
+mod hostsfile;
 mod monitor;
 mod ping;
+mod ports;
 mod screens;
 mod sysdns;
 mod ui;
