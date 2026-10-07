@@ -47,15 +47,15 @@ jobs:
           releaseName: "zagzig-tools ${{ github.ref_name }}"
           # NOTE: this is a static, per-release description — update it
           # before tagging each release (it's plain text, not generated from
-          # commits/changelog). What's below describes v0.13.0 specifically.
+          # commits/changelog). What's below describes v0.13.1 specifically.
           releaseBody: |
-            ## What's new in v0.13.0
+            ## What's new in v0.13.1
 
-            - **New Dashboard**: a small card for every feature, grouped like the sidebar. The
-              sidebar stays hidden on the Dashboard and opens when you pick a feature.
-            - **Back to Dashboard**: a button in the top bar of every feature page.
-            - **User manual**: rewritten to be shorter and easier to read, and brought up to date
-              with every feature.
+            - **Starred features**: hover a feature's icon on the Dashboard or in the sidebar and
+              click its star to keep it in a Starred row on the Dashboard and a Starred group at
+              the top of the sidebar.
+            - **Dashboard**: features are now small desktop-style icons, and the summary cards that
+              repeated features already listed below them are gone.
 
             See the assets below to download this release.
 
