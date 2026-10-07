@@ -21,7 +21,7 @@ Looking for how to use the app rather than how it's built? See the
 | User Manual | This project's user manual, built into the app with a searchable table of contents (English only) |
 | Languages | English and Indonesian built in; add any other language as a JSON file — export a template, translate it, import it, no rebuild needed |
 | NRPT Rules | View Name Resolution Policy Table rules — what `Add-DnsClientNrptRule` configures |
-| Connection Test | Ping + traceroute a host in plain language: is it reachable, and what path did it take |
+| Connection Test | Ping + traceroute a host in plain language: is it reachable, and what path did it take; saved hosts shared with Port Scanner and TLS Inspector |
 | Network Routes | View and manage the Windows IP routing table (`route print`/`add`/`delete`, with a GUI) |
 | Ports | See which application uses which TCP/UDP port, with the owning process's details; spot reserved port ranges (Hyper-V/WSL/Docker) and stop the process or service holding a port |
 | Port Proxy | Add, view and remove `netsh interface portproxy` forwarding rules — the usual WSL/Docker workaround, with no built-in GUI |
@@ -32,10 +32,10 @@ Looking for how to use the app rather than how it's built? See the
 | DNS Lookup | A `dig`-style query tool: pick a record type and a specific DNS server to ask |
 | DNS Cache | View and flush the resolver cache — what `ipconfig /displaydns`/`/flushdns` do, no GUI |
 | DNS Monitor | Background, continuous resolution checks against chosen DNS servers, with a running log |
-| Hosts File | Edit `C:\Windows\System32\drivers\etc\hosts`, structured or raw, and drag entries to reorder them — no built-in GUI exists for this |
+| Hosts File | Edit `C:\Windows\System32\drivers\etc\hosts`, structured or raw, drag entries to reorder them, and restore from automatic backups — no built-in GUI exists for this |
 | SSH Config | Add, edit and remove `Host` entries in `~/.ssh/config`, structured or raw — no admin rights needed |
 | WSL | Stop distros, shut down or force-restart a hung WSL (and Docker Desktop), and edit `.wslconfig` |
-| Firewall | List Windows Defender Firewall rules (direction, action, protocol, port, program) and turn them on or off |
+| Firewall | List Windows Defender Firewall rules, turn them on or off, and create or delete allow/block rules for a port (also from a Ports row) |
 | Neighbors (ARP) | View and clear the IPv4 ARP / IPv6 neighbor cache — which devices this PC has talked to recently |
 | VPN | See and connect/disconnect the VPN connections built into Windows |
 | Wi-Fi | Saved wireless networks and their security; show a saved password after administrator approval |
@@ -43,10 +43,11 @@ Looking for how to use the app rather than how it's built? See the
 | Environment Variables | Edit user and system environment variables, with a list editor for PATH (missing/duplicate folders flagged) and undo for every change |
 | Event Log | Recent System/Application events filtered to network & DNS problems and WSL/Hyper-V/Docker |
 | Proxy Settings | The WinHTTP proxy (`netsh winhttp`) — the machine-wide proxy Windows Update and many background services and CLI tools honor, separate from the one in Settings > Network |
+| Diagnostic Report | One Markdown report of the PC's network setup for a support ticket, with names, MACs and IPs optionally hidden |
 | Startup | See and switch off what starts at sign-in (registry Run keys and Startup folders) — the same switch Task Manager uses |
 | TLS Inspector | Connect to a host:port and show its certificate, chain, expiry and whether Windows trusts it |
 | Code Signing | Sign and verify files with Authenticode via `signtool.exe`, auto-located from the Windows SDK |
-| Certificate Store | Browse, view details of, export, or delete certificates without `certmgr.msc` |
+| Certificate Store | Browse, view details of, export, import (DER, PEM bundles, PFX) or delete certificates without `certmgr.msc` |
 
 Anything that writes to the system (removing an NRPT rule, adding a route, changing DNS servers,
 editing the hosts file, ...) needs administrator rights. The app itself runs unelevated and asks

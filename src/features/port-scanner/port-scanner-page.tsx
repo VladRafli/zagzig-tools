@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Loader2, ScanSearch, Square } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { SavedTargets } from "@/components/saved-targets";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -82,6 +83,20 @@ export function PortScannerPage() {
       </p>
 
       <form onSubmit={scan} className="flex flex-col gap-4">
+        <SavedTargets
+          current={{ host, ports }}
+          onLoad={(saved) => {
+            setHost(saved.host);
+            if (!saved.ports) return;
+            // Use a preset when the saved ports are exactly one of them.
+            const match = Object.entries(PRESETS).find(([, value]) => value === saved.ports);
+            if (match) setPreset(match[0]);
+            else {
+              setPreset("custom");
+              setCustom(saved.ports);
+            }
+          }}
+        />
         <div className="grid gap-4 sm:grid-cols-[2fr_1.5fr_1fr]">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="scanHost">{t("portScanner.hostLabel")}</Label>

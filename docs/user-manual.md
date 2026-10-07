@@ -76,16 +76,19 @@ only.
 ### Administrator rights
 
 Some actions need administrator approval — removing an NRPT rule, adding or removing a route,
-changing DNS servers, editing or reordering the hosts file, changing the WinHTTP proxy, adding or
-removing a port proxy rule, enabling, disabling or renewing a network adapter, stopping a Windows
-service, turning a firewall rule on or off, clearing ARP/neighbor entries, starting, stopping or
-reconfiguring a service, showing a saved Wi-Fi password, changing a System environment variable,
-turning off or on a startup entry that applies to all users, force restarting WSL, or deleting a certificate from the machine-wide (`Local Machine`) store.
-Reading any of these pages — and the Ports, Port Proxy, Network Adapters, DNS Lookup, Firewall,
-Neighbors, VPN, Wi-Fi (profile list), Services, Event Log and Environment Variables pages — plus
-the SSH Config page and the rest of the WSL page, don't need administrator rights. Connecting or
-disconnecting a VPN and editing your own (User) environment variables don't either, and stopping a
-process only asks for approval if Windows refuses to let you stop it as yourself.
+changing DNS servers, editing, reordering or restoring a backup of the hosts file, changing the
+WinHTTP proxy, adding or removing a port proxy rule, enabling, disabling or renewing a network
+adapter, stopping a Windows service, creating, deleting or switching a firewall rule, clearing
+ARP/neighbor entries, starting, stopping or reconfiguring a service, showing a saved Wi-Fi
+password, changing a System environment variable, switching a startup entry that applies to all
+users, force restarting WSL, importing a certificate into, or deleting one from, a machine-wide
+(`Local Machine`) store. Reading any of these pages — including Ports, Port Proxy, Network
+Adapters, DNS Lookup, Firewall, Neighbors, VPN, Wi-Fi (profile list), Services, Event Log,
+Environment Variables, Startup, Diagnostic Report and the certificate and TLS pages — plus the SSH
+Config page and the rest of the WSL page, don't need administrator rights. Connecting or
+disconnecting a VPN, importing a certificate into your own account's stores, and editing your own
+(User) environment variables don't either, and stopping a process only asks for approval if Windows
+refuses to let you stop it as yourself.
 
 The app itself **never needs to run elevated**. Instead, each privileged action triggers exactly
 one UAC prompt for that specific change — you don't have to relaunch the whole app as
@@ -180,6 +183,13 @@ Enter a hostname or IP and run a test to see:
 Both run from a single "Run test" action, and your last several tests are kept in a **History**
 list you can re-run or clear.
 
+**Saved hosts**: above the address box, **Save this host** keeps the current host under a name,
+and the dropdown loads one back in a click. The same list is shared with the **Port Scanner** (which
+also remembers the ports) and the **TLS Inspector** (which also remembers the port), so a host saved
+as "staging" on one page is there on the others. Saving under an existing name updates it and fills
+in anything the other pages know. **Manage** lists them and removes the ones you don't want. They're
+stored on this PC only.
+
 ### Ports
 
 *Network → Ports*
@@ -215,6 +225,10 @@ Details tab would tell you, joined into one view. It needs no administrator righ
   killed process) and requires administrator approval. Critical Windows processes (such as
   `System`, `csrss.exe`, `lsass.exe`) are never offered, and the app checks the PID still belongs
   to the same process before stopping it, in case the list is out of date.
+
+- **Allow in firewall**: for a listening port, the expanded row has **Allow port N in firewall…**,
+  which opens the Firewall rule dialog already filled in with the port, protocol and the owning
+  program (see the Firewall page). Requires administrator rights.
 
 Windows hides the executable path and command line of processes owned by other users or the system
 from non-administrator accounts, so those rows show "—" for those fields. If a process exits
@@ -377,6 +391,13 @@ file" troubleshooting guide, which has no dedicated GUI anywhere in Windows.
   row to move it above (dragging up) or below (dragging down) that row — drop on the first or last
   row to send an entry to the very top or bottom. Only the dragged line moves; comments and blank
   lines stay where they were. Requires administrator rights (one UAC prompt per move).
+- **Backups**: an expandable section at the bottom. A copy of the file is saved automatically
+  before every change made on this page — adding, removing, switching, reordering, a raw edit, or a
+  restore — unless it's identical to the newest copy, and the newest 30 are kept (in the app's data
+  folder). **Back up now** makes one on demand. **Compare / restore** shows exactly which lines a
+  restore would bring back and which it would remove, before you confirm. Restoring needs
+  administrator rights and takes a backup of the file it replaces first, so a restore can be undone
+  too. Backups contain the whole file, comments included.
 
 ### SSH Config
 
@@ -458,7 +479,17 @@ Ports page. Reading rules needs no administrator rights.
   The rule is matched by its exact internal name, so a name containing a wildcard can't affect
   other rules.
 
-Rules can't be created or deleted from here, and the per-profile on/off state is display-only.
+- **New rule**: creates an allow or block rule for a port (a single port, several, or a range like
+  `8000-8100`), inbound or outbound, TCP or UDP, optionally for one program (a full path), on the
+  profiles you pick. **Local network only** (the default) limits an allow rule to your own subnet;
+  **Any address** opens it to everyone who can reach the PC, and the dialog warns you. Requires
+  administrator rights.
+- **From the Ports page**: expand a listening port's row and choose **Allow port N in firewall…**.
+  The dialog opens already filled in with the port, protocol and the program that owns it.
+- **Delete**: every rule created here is tagged as this app's, shows a trash button, and is the only
+  kind this app will delete — Windows' own rules can be switched off but never removed from here.
+
+The per-profile on/off state is display-only.
 
 ### Neighbors (ARP)
 
@@ -617,6 +648,33 @@ it comes from.
 Scheduled tasks and Windows services that start at boot aren't listed here — use the Services page
 for services.
 
+### Diagnostic Report
+
+*System → Diagnostic Report*
+
+Gathers what this app knows about the PC into one Markdown report you can attach to a support
+ticket or send to a colleague. Nothing is uploaded: the report appears on screen, and you copy it or
+save it as a `.md` or `.txt` file. It needs no administrator rights, and building one takes a few
+seconds because the sections are collected at the same time.
+
+- **Sections** (all on by default): **System** (Windows version and build, hardware, uptime, whether
+  you're an administrator), **Network adapters**, **DNS client settings**, **NRPT rules**,
+  **Routes** (default routes and a total), **Proxy**, **Hosts file** (active entries only; comments
+  are left out), **Listening ports** (with the process behind each, up to 120), **Firewall**
+  (profile on/off state and rule counts), **WSL and Docker**, and **Recent network errors** (network
+  and DNS errors and warnings from the last 24 hours). A section that can't be read says so in the
+  report instead of stopping it.
+- **Hide the computer and user names and MAC addresses** (on by default): the names become
+  `<computer>` and `<user>` wherever they appear, including inside folder paths and event messages,
+  and MAC addresses become `xx-xx-xx-xx-xx-xx`.
+- **Hide the last part of IPv4 addresses** (off by default): `192.168.1.20` becomes `192.168.1.x`.
+  Loopback addresses (`127.x`) and `0.0.0.0` are left alone, IPv6 addresses aren't masked, and the
+  System section's version numbers are never touched.
+
+The report never contains saved Wi-Fi passwords or environment variable values. Read it through
+before sharing it all the same — host names in the hosts file, folder names and process names can
+still identify you or your organisation.
+
 ### Code Signing
 
 *Dev Tools → Code Signing*
@@ -657,8 +715,7 @@ needs no administrator rights, and nothing is sent after the handshake.
 Windows tools, .NET apps and PowerShell go by. Browsers such as Firefox and tools that bring their own
 list of authorities (Node.js, Python, Java and others) can decide differently. A self-signed or
 private-CA certificate shows as not trusted until its CA is added to **Trusted Root Certification
-Authorities** (this app can browse and remove certificates in the Certificate Store page, but not
-import them — use `certmgr.msc` or `Import-Certificate` for that). If a server fails to send its intermediate
+Authorities** (use **Import…** on the Certificate Store page). If a server fails to send its intermediate
 certificates, Windows may not be able to complete the chain, which is a common cause of "works in the
 browser, fails in my tool".
 
@@ -679,6 +736,19 @@ and Trusted Publishers, each for either the current user or the local machine.
 - **Delete**: removes the certificate. Only certificates in a **Local Machine** store need
   administrator rights to delete — **Current User** store certificates belong to your own account
   and can be removed without elevation.
+- **Import…**: adds certificates from a file (`.cer`, `.crt`, `.der`, `.pem`, `.p7b`, or a
+  password-protected `.pfx`/`.p12`). It works in two steps so nothing is trusted blind: first the
+  file is read and every certificate in it is listed — subject, issuer, expiry, thumbprint, and
+  whether it's a certificate authority, self-signed, or carries a private key — and only after you
+  choose a store and confirm is anything added. PEM bundles with several certificates import all of
+  them. A password-protected file asks for its password first; the password is used once and not
+  stored.
+
+  Importing into a **Trusted Root Certification Authorities** store makes Windows trust that
+  authority for everything — for your account, or for every user if it's the Local Machine store — so
+  the dialog says so in red and you should check the thumbprint against the one you were given.
+  Windows itself also shows a confirmation when you add a root certificate to your own account.
+  Importing into any **Local Machine** store needs administrator rights.
 
 ---
 

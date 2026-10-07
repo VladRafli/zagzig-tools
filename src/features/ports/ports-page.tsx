@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ChevronRight, Loader2, Lock, OctagonX, RefreshCw, Search } from "lucide-react";
+import { ChevronRight, Loader2, Lock, OctagonX, RefreshCw, Search, ShieldPlus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { toast } from "sonner";
@@ -9,6 +9,7 @@ import { AdminRequiredTooltip } from "@/components/admin-required-tooltip";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CollapsibleDetails } from "@/components/collapsible-details";
+import { FirewallRuleDialog } from "@/features/firewall/rule-dialog";
 import {
   Dialog,
   DialogContent,
@@ -316,6 +317,10 @@ function PortRow({
   isAdministrator: boolean;
   onChanged: () => void;
 }) {
+  const [ruleOpen, setRuleOpen] = useState(false);
+  // Only something that's accepting connections can usefully be allowed.
+  const listening = entry.protocol === "UDP" || entry.state === "Listen";
+
   return (
     <div className="border-b last:border-b-0">
       <button
@@ -347,12 +352,42 @@ function PortRow({
         </span>
       </button>
       {expanded && (
-        <div className="border-t bg-muted/20 px-4 py-3">
+        <div className="flex flex-col gap-3 border-t bg-muted/20 px-4 py-3">
+          {listening && (
+            <div className="flex flex-wrap items-center gap-2">
+              <AdminRequiredTooltip locked={!isAdministrator}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={!isAdministrator}
+                  onClick={() => setRuleOpen(true)}
+                >
+                  {isAdministrator ? <ShieldPlus /> : <Lock />}
+                  {t("ports.firewall.allow", { port: entry.localPort })}
+                </Button>
+              </AdminRequiredTooltip>
+              <span className="text-xs text-muted-foreground">{t("ports.firewall.hint")}</span>
+            </div>
+          )}
           <ProcessDetails
             process={process}
             t={t}
             isAdministrator={isAdministrator}
             onChanged={onChanged}
+          />
+          <FirewallRuleDialog
+            open={ruleOpen}
+            prefill={{
+              name: t("ports.firewall.ruleName", {
+                program: process?.name ?? entry.protocol,
+                port: entry.localPort,
+              }),
+              ports: String(entry.localPort),
+              protocol: entry.protocol,
+              program: process?.path ?? null,
+            }}
+            onClose={() => setRuleOpen(false)}
+            onCreated={() => {}}
           />
         </div>
       )}

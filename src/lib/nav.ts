@@ -18,6 +18,7 @@ import {
   Waypoints,
   BookOpen,
   Boxes,
+  ClipboardList,
   LockKeyhole,
   Power,
   Rocket,
@@ -71,6 +72,7 @@ export type NavId =
   | "port-scanner"
   | "startup"
   | "tls-inspector"
+  | "diagnostics"
   | "proxy-settings"
   | "code-signing"
   | "certificate-store";
@@ -116,6 +118,7 @@ export const navGroups: NavGroup[] = [
       { id: "event-log", labelKey: "nav.eventLog", icon: ScrollText },
       { id: "environment", labelKey: "nav.environment", icon: Variable },
       { id: "startup", labelKey: "nav.startup", icon: Rocket },
+      { id: "diagnostics", labelKey: "nav.diagnostics", icon: ClipboardList },
     ],
   },
   {

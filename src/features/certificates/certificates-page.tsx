@@ -29,6 +29,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { DetailList, DetailRow } from "@/components/detail-list";
+import { ImportCertificate } from "@/features/certificates/import-certificate";
 import { AdminRequiredTooltip } from "@/components/admin-required-tooltip";
 import { useIsAdministrator } from "@/lib/use-is-administrator";
 import {
@@ -359,14 +360,17 @@ export function CertificatesPage() {
               </SelectContent>
             </Select>
           </div>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={certs.refresh}
-            disabled={certs.status === "loading"}
-          >
-            <RefreshCw className={certs.status === "loading" ? "animate-spin" : ""} />
-          </Button>
+          <div className="flex items-center gap-2">
+            <ImportCertificate defaultStore={selected} onImported={certs.refresh} />
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={certs.refresh}
+              disabled={certs.status === "loading"}
+            >
+              <RefreshCw className={certs.status === "loading" ? "animate-spin" : ""} />
+            </Button>
+          </div>
         </CardContent>
       </Card>
 

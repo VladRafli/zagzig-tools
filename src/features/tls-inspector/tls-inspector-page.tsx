@@ -4,6 +4,7 @@ import { Loader2, LockKeyhole } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 
+import { SavedTargets } from "@/components/saved-targets";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DetailList, DetailRow } from "@/components/detail-list";
@@ -239,6 +240,13 @@ export function TlsInspectorPage() {
       </div>
 
       <form onSubmit={inspect} className="flex flex-col gap-4">
+        <SavedTargets
+          current={{ host, tlsPort: port }}
+          onLoad={(saved) => {
+            setHost(saved.host);
+            if (saved.tlsPort) setPort(saved.tlsPort);
+          }}
+        />
         <div className="grid gap-4 sm:grid-cols-[2fr_6rem_2fr]">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="tlsHost">{t("tlsInspector.hostLabel")}</Label>

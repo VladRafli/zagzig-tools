@@ -28,6 +28,7 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { CollapsibleDetails } from "@/components/collapsible-details";
+import { HostsBackups } from "@/features/hosts/hosts-backups";
 import { useHostsFile, type HostsEntry } from "@/features/hosts/use-hosts-file";
 import { formatRelativeTime } from "@/lib/relative-time";
 import { useIsAdministrator } from "@/lib/use-is-administrator";
@@ -559,6 +560,16 @@ export function HostsPage() {
           </CardContent>
         </Card>
       )}
+
+      <Card>
+        <CardContent>
+          <HostsBackups
+            currentRaw={hosts.raw}
+            isAdministrator={isAdministrator}
+            onRestored={hosts.refresh}
+          />
+        </CardContent>
+      </Card>
     </div>
   );
 }

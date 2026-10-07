@@ -14,6 +14,7 @@ export interface FirewallRule {
   remotePort: string;
   program: string | null;
   group: string | null;
+  appCreated?: boolean;
 }
 
 export interface FirewallProfile {

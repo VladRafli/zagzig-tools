@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Loader2, RefreshCw, Search } from "lucide-react";
+import { Loader2, Lock, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { toast } from "sonner";
@@ -17,6 +17,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { FirewallRuleDialog } from "@/features/firewall/rule-dialog";
 import { useFirewall, type FirewallRule } from "@/features/firewall/use-firewall";
 import { formatRelativeTime } from "@/lib/relative-time";
 import { useIsAdministrator } from "@/lib/use-is-administrator";
@@ -27,18 +36,20 @@ type DirectionFilter = "all" | "Inbound" | "Outbound";
 type ActionFilter = "all" | "Allow" | "Block";
 type EnabledFilter = "all" | "enabled" | "disabled";
 
-const GRID = "grid-cols-[2.5rem_1.6fr_5.5rem_4.5rem_4.5rem_6rem_1fr]";
+const GRID = "grid-cols-[2.5rem_1.6fr_5.5rem_4.5rem_4.5rem_6rem_1fr_2rem]";
 
 function RuleRow({
   rule,
   t,
   isAdministrator,
   onChanged,
+  onDelete,
 }: {
   rule: FirewallRule;
   t: TFunction;
   isAdministrator: boolean;
   onChanged: () => void;
+  onDelete: (rule: FirewallRule) => void;
 }) {
   const [busy, setBusy] = useState(false);
 
@@ -93,6 +104,23 @@ function RuleRow({
       <span className="text-xs">{rule.protocol}</span>
       <span className="break-all text-xs">{rule.localPort}</span>
       <span className="break-words text-xs">{rule.profile}</span>
+      <div className="flex justify-end">
+        {rule.appCreated && (
+          <AdminRequiredTooltip locked={!isAdministrator}>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={t("firewall.rule.delete")}
+              title={t("firewall.rule.deleteHint")}
+              disabled={!isAdministrator}
+              onClick={() => onDelete(rule)}
+            >
+              {isAdministrator ? <Trash2 /> : <Lock />}
+            </Button>
+          </AdminRequiredTooltip>
+        )}
+      </div>
+
     </div>
   );
 }
@@ -101,6 +129,21 @@ export function FirewallPage() {
   const { t } = useTranslation();
   const { profiles, rules, status, error, updatedAt, refresh } = useFirewall();
   const { isAdministrator } = useIsAdministrator();
+  const [creating, setCreating] = useState(false);
+  const [deleting, setDeleting] = useState<FirewallRule | null>(null);
+
+  async function confirmDelete() {
+    const rule = deleting;
+    if (!rule) return;
+    setDeleting(null);
+    try {
+      await invoke("delete_firewall_rule", { name: rule.name });
+      toast.success(t("firewall.rule.deleted", { name: rule.displayName }));
+      refresh();
+    } catch (err) {
+      toast.error(t("firewall.rule.deleteError", { error: err instanceof Error ? err.message : String(err) }));
+    }
+  }
 
   const [query, setQuery] = useState("");
   const [direction, setDirection] = useState<DirectionFilter>("all");
@@ -206,6 +249,12 @@ export function FirewallPage() {
             "w-36",
             t("firewall.columns.on"),
           )}
+          <AdminRequiredTooltip locked={!isAdministrator}>
+            <Button variant="outline" size="sm" onClick={() => setCreating(true)} disabled={!isAdministrator}>
+              {isAdministrator ? <Plus /> : <Lock />}
+              {t("firewall.rule.new")}
+            </Button>
+          </AdminRequiredTooltip>
           <div className="ml-auto flex items-center gap-2">
             {updatedAt && (
               <span className="text-xs text-muted-foreground">
@@ -252,6 +301,7 @@ export function FirewallPage() {
                   <span>{t("firewall.columns.protocol")}</span>
                   <span>{t("firewall.columns.localPort")}</span>
                   <span>{t("firewall.columns.profile")}</span>
+                  <span />
                 </div>
                 {filtered.slice(0, limit).map((rule) => (
                   <RuleRow
@@ -260,6 +310,7 @@ export function FirewallPage() {
                     t={t}
                     isAdministrator={isAdministrator}
                     onChanged={refresh}
+                    onDelete={setDeleting}
                   />
                 ))}
               </div>
@@ -274,6 +325,25 @@ export function FirewallPage() {
           </>
         )}
       </div>
+
+      <FirewallRuleDialog open={creating} prefill={{}} onClose={() => setCreating(false)} onCreated={refresh} />
+
+      <Dialog open={deleting !== null} onOpenChange={(open) => !open && setDeleting(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("firewall.rule.deleteTitle", { name: deleting?.displayName ?? "" })}</DialogTitle>
+            <DialogDescription>{t("firewall.rule.deleteDescription")}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleting(null)}>
+              {t("firewall.rule.cancel")}
+            </Button>
+            <Button variant="destructive" onClick={confirmDelete}>
+              {t("firewall.rule.deleteConfirm")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

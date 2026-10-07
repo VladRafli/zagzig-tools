@@ -36,6 +36,11 @@ pub fn run() {
             hosts::remove_hosts_entry,
             hosts::set_hosts_entry_enabled,
             hosts::set_hosts_raw,
+            hosts::list_hosts_backups,
+            hosts::create_hosts_backup,
+            hosts::read_hosts_backup,
+            hosts::restore_hosts_backup,
+            hosts::delete_hosts_backup,
             hosts::move_hosts_entry,
             ssh::get_ssh_hosts,
             ssh::add_ssh_host,
@@ -55,6 +60,8 @@ pub fn run() {
             dnslookup::dns_lookup,
             firewall::get_firewall,
             firewall::set_firewall_rule_enabled,
+            firewall::create_firewall_rule,
+            firewall::delete_firewall_rule,
             neighbors::get_neighbors,
             neighbors::remove_neighbor,
             neighbors::clear_neighbors,
@@ -86,6 +93,8 @@ pub fn run() {
             startup::set_startup_item_enabled,
             startup::reveal_in_explorer,
             tls::inspect_tls,
+            diagnostics::build_diagnostic_report,
+            diagnostics::save_text_report,
             wsl::get_wsl_status,
             wsl::wsl_terminate_distro,
             wsl::wsl_set_default_distro,
@@ -101,6 +110,8 @@ pub fn run() {
             certificates::get_certificates,
             certificates::delete_certificate,
             certificates::export_certificate,
+            certificates::inspect_certificate_file,
+            certificates::import_certificate,
             dns_cache::get_dns_cache,
             dns_cache::flush_dns_cache
         ])
@@ -1957,7 +1968,12 @@ try {
 }
 "#;
 
-    async fn write_hosts_raw(content: String) -> Result<(), String> {
+    // Every write goes through here, so every write is preceded by a backup
+    // of what's about to be replaced (see the backup section below). A
+    // backup that can't be made doesn't block the edit — the user asked for
+    // it, and the file is theirs — but it's the common case that it works.
+    async fn write_hosts_raw(app: &tauri::AppHandle, reason: &str, content: String) -> Result<(), String> {
+        let _ = backup_current(app, reason).await;
         let trimmed = run_elevated(SET_HOSTS_WORKER_SCRIPT, &content).await?;
         let parsed: ElevatedResult = serde_json::from_str(&trimmed)
             .map_err(|err| format!("failed to parse powershell output: {err}"))?;
@@ -1970,6 +1986,7 @@ try {
 
     #[tauri::command]
     pub async fn add_hosts_entry(
+        app: tauri::AppHandle,
         ip: String,
         hostnames: Vec<String>,
         comment: Option<String>,
@@ -2004,11 +2021,11 @@ try {
         new_content.push_str(&line);
         new_content.push('\n');
 
-        write_hosts_raw(new_content).await
+        write_hosts_raw(&app, "add", new_content).await
     }
 
     #[tauri::command]
-    pub async fn remove_hosts_entry(line_number: usize) -> Result<(), String> {
+    pub async fn remove_hosts_entry(app: tauri::AppHandle, line_number: usize) -> Result<(), String> {
         let raw = tauri::async_runtime::spawn_blocking(read_hosts_raw)
             .await
             .map_err(|err| format!("hosts read task failed to run: {err}"))??;
@@ -2024,11 +2041,15 @@ try {
             format!("{}\n", lines.join("\n"))
         };
 
-        write_hosts_raw(new_content).await
+        write_hosts_raw(&app, "remove", new_content).await
     }
 
     #[tauri::command]
-    pub async fn set_hosts_entry_enabled(line_number: usize, enabled: bool) -> Result<(), String> {
+    pub async fn set_hosts_entry_enabled(
+        app: tauri::AppHandle,
+        line_number: usize,
+        enabled: bool,
+    ) -> Result<(), String> {
         let raw = tauri::async_runtime::spawn_blocking(read_hosts_raw)
             .await
             .map_err(|err| format!("hosts read task failed to run: {err}"))??;
@@ -2054,7 +2075,7 @@ try {
         };
 
         let new_content = format!("{}\n", lines.join("\n"));
-        write_hosts_raw(new_content).await
+        write_hosts_raw(&app, "toggle", new_content).await
     }
 
     // Moves the entry at `line_number` so it lands where the entry at
@@ -2062,7 +2083,11 @@ try {
     // it when dragged downwards. Either way that's index `target` once the
     // moved line has been taken out.
     #[tauri::command]
-    pub async fn move_hosts_entry(line_number: usize, target_line_number: usize) -> Result<(), String> {
+    pub async fn move_hosts_entry(
+        app: tauri::AppHandle,
+        line_number: usize,
+        target_line_number: usize,
+    ) -> Result<(), String> {
         if line_number == target_line_number {
             return Ok(());
         }
@@ -2077,12 +2102,218 @@ try {
         let moved = lines.remove(line_number);
         lines.insert(target_line_number, moved);
 
-        write_hosts_raw(format!("{}\n", lines.join("\n"))).await
+        write_hosts_raw(&app, "move", format!("{}\n", lines.join("\n"))).await
     }
 
     #[tauri::command]
-    pub async fn set_hosts_raw(content: String) -> Result<(), String> {
-        write_hosts_raw(content).await
+    pub async fn set_hosts_raw(app: tauri::AppHandle, content: String) -> Result<(), String> {
+        write_hosts_raw(&app, "raw", content).await
+    }
+
+    // --- Backups ---------------------------------------------------------
+    //
+    // A copy of the hosts file is saved before every change (unless it's
+    // identical to the newest copy), plus on demand, in the app's data
+    // folder. The newest 30 are kept. Restoring one is itself a change, so
+    // it takes a backup of what it replaces first.
+
+    const BACKUP_LIMIT: usize = 30;
+    const BACKUP_REASONS: [&str; 7] = ["add", "remove", "toggle", "move", "raw", "manual", "restore"];
+
+    #[derive(Debug, Clone, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct HostsBackup {
+        pub file: String,
+        /// Seconds since the Unix epoch.
+        pub time: u64,
+        /// What was about to happen when it was taken.
+        pub reason: String,
+        pub size: u64,
+        pub lines: usize,
+    }
+
+    fn backups_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+        use tauri::Manager;
+        let dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|err| format!("couldn't find the app data folder: {err}"))?
+            .join("hosts-backups");
+        std::fs::create_dir_all(&dir).map_err(|err| format!("couldn't create the backups folder: {err}"))?;
+        Ok(dir)
+    }
+
+    // "hosts-<seconds>-<reason>.txt"
+    fn parse_backup_name(name: &str) -> Option<(u64, String)> {
+        let middle = name.strip_prefix("hosts-")?.strip_suffix(".txt")?;
+        let (secs, reason) = middle.split_once('-')?;
+        if !BACKUP_REASONS.contains(&reason) {
+            return None;
+        }
+        Some((secs.parse().ok()?, reason.to_string()))
+    }
+
+    fn list_backups_in(dir: &std::path::Path) -> Vec<HostsBackup> {
+        let mut backups: Vec<HostsBackup> = std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| {
+                let file = entry.file_name().to_string_lossy().into_owned();
+                let (time, reason) = parse_backup_name(&file)?;
+                let size = entry.metadata().ok()?.len();
+                let lines = std::fs::read_to_string(entry.path()).map(|t| t.lines().count()).unwrap_or(0);
+                Some(HostsBackup { file, time, reason, size, lines })
+            })
+            .collect();
+        backups.sort_by(|a, b| b.time.cmp(&a.time).then_with(|| b.file.cmp(&a.file)));
+        backups
+    }
+
+    // Saves `raw` unless it's identical to the newest backup. Returns the
+    // new file's name, or `None` if nothing was written.
+    fn save_backup(dir: &std::path::Path, raw: &str, reason: &str, now: u64) -> Result<Option<String>, String> {
+        if !BACKUP_REASONS.contains(&reason) {
+            return Err("Unknown backup reason.".to_string());
+        }
+        let existing = list_backups_in(dir);
+        if let Some(newest) = existing.first() {
+            if std::fs::read_to_string(dir.join(&newest.file)).is_ok_and(|t| t == raw) {
+                return Ok(None);
+            }
+        }
+        let file = format!("hosts-{now}-{reason}.txt");
+        std::fs::write(dir.join(&file), raw).map_err(|err| format!("couldn't save the backup: {err}"))?;
+        for old in list_backups_in(dir).into_iter().skip(BACKUP_LIMIT) {
+            let _ = std::fs::remove_file(dir.join(old.file));
+        }
+        Ok(Some(file))
+    }
+
+    fn now_secs() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
+
+    async fn backup_current(app: &tauri::AppHandle, reason: &str) -> Result<Option<String>, String> {
+        let dir = backups_dir(app)?;
+        let reason = reason.to_string();
+        tauri::async_runtime::spawn_blocking(move || {
+            let raw = read_hosts_raw()?;
+            save_backup(&dir, &raw, &reason, now_secs())
+        })
+        .await
+        .map_err(|err| format!("backup task failed to run: {err}"))?
+    }
+
+    #[tauri::command]
+    pub async fn list_hosts_backups(app: tauri::AppHandle) -> Result<Vec<HostsBackup>, String> {
+        let dir = backups_dir(&app)?;
+        tauri::async_runtime::spawn_blocking(move || list_backups_in(&dir))
+            .await
+            .map_err(|err| format!("backup task failed to run: {err}"))
+    }
+
+    /// Backs the file up now. `false` if it's identical to the newest backup.
+    #[tauri::command]
+    pub async fn create_hosts_backup(app: tauri::AppHandle) -> Result<bool, String> {
+        backup_current(&app, "manual").await.map(|saved| saved.is_some())
+    }
+
+    fn backup_path(app: &tauri::AppHandle, file: &str) -> Result<PathBuf, String> {
+        if parse_backup_name(file).is_none() {
+            return Err("That isn't one of this app's backups.".to_string());
+        }
+        Ok(backups_dir(app)?.join(file))
+    }
+
+    #[tauri::command]
+    pub async fn read_hosts_backup(app: tauri::AppHandle, file: String) -> Result<String, String> {
+        let path = backup_path(&app, &file)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            std::fs::read_to_string(path).map_err(|err| format!("couldn't read the backup: {err}"))
+        })
+        .await
+        .map_err(|err| format!("backup task failed to run: {err}"))?
+    }
+
+    #[tauri::command]
+    pub async fn restore_hosts_backup(app: tauri::AppHandle, file: String) -> Result<(), String> {
+        let path = backup_path(&app, &file)?;
+        let content = tauri::async_runtime::spawn_blocking(move || {
+            std::fs::read_to_string(path).map_err(|err| format!("couldn't read the backup: {err}"))
+        })
+        .await
+        .map_err(|err| format!("backup task failed to run: {err}"))??;
+        write_hosts_raw(&app, "restore", content).await
+    }
+
+    #[tauri::command]
+    pub async fn delete_hosts_backup(app: tauri::AppHandle, file: String) -> Result<(), String> {
+        let path = backup_path(&app, &file)?;
+        tauri::async_runtime::spawn_blocking(move || match std::fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(format!("couldn't delete the backup: {err}")),
+        })
+        .await
+        .map_err(|err| format!("backup task failed to run: {err}"))?
+    }
+
+    #[cfg(test)]
+    mod backup_tests {
+        use super::*;
+
+        fn temp_dir(tag: &str) -> PathBuf {
+            let dir = std::env::temp_dir().join(format!("zagzig-hosts-test-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            dir
+        }
+
+        #[test]
+        fn parses_only_this_apps_backup_names() {
+            assert_eq!(parse_backup_name("hosts-1700000000-add.txt"), Some((1_700_000_000, "add".into())));
+            assert_eq!(parse_backup_name("hosts-5-restore.txt"), Some((5, "restore".into())));
+            for bad in ["hosts", "hosts-1-evil.txt", "hosts-x-add.txt", "hosts-1-add.exe", "../hosts-1-add.txt", "hosts-1-add.txt.bak", ""] {
+                assert_eq!(parse_backup_name(bad), None, "{bad}");
+            }
+        }
+
+        #[test]
+        fn skips_a_backup_identical_to_the_newest_and_lists_newest_first() {
+            let dir = temp_dir("dedupe");
+            assert!(save_backup(&dir, "127.0.0.1 a\n", "manual", 100).unwrap().is_some());
+            assert!(save_backup(&dir, "127.0.0.1 a\n", "add", 101).unwrap().is_none(), "unchanged");
+            assert!(save_backup(&dir, "127.0.0.1 b\n", "add", 102).unwrap().is_some());
+            let list = list_backups_in(&dir);
+            assert_eq!(list.iter().map(|b| b.time).collect::<Vec<_>>(), vec![102, 100]);
+            assert_eq!(list[0].reason, "add");
+            assert_eq!(list[1].lines, 1);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn keeps_only_the_newest_thirty() {
+            let dir = temp_dir("prune");
+            for i in 0..(BACKUP_LIMIT as u64 + 6) {
+                save_backup(&dir, &format!("# version {i}\n"), "raw", 1000 + i).unwrap();
+            }
+            let list = list_backups_in(&dir);
+            assert_eq!(list.len(), BACKUP_LIMIT);
+            assert_eq!(list[0].time, 1000 + BACKUP_LIMIT as u64 + 5);
+            assert_eq!(list.last().unwrap().time, 1006, "the six oldest were pruned");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn rejects_an_unknown_reason() {
+            let dir = temp_dir("reason");
+            assert!(save_backup(&dir, "x", "../../evil", 1).is_err());
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }
 
@@ -4279,6 +4510,9 @@ mod firewall {
         pub remote_port: String,
         pub program: Option<String>,
         pub group: Option<String>,
+        /// Created by this app (tagged with its rule group) — the only kind it deletes.
+        #[serde(default)]
+        pub app_created: bool,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -4341,6 +4575,7 @@ foreach ($r in @(Get-CimInstance -Namespace $ns MSFT_NetFirewallRule)) {
         remotePort = if ($pf) { Join-Ports $pf.RemotePort } else { 'Any' }
         program = if ($apps.ContainsKey($r.InstanceID)) { $apps[$r.InstanceID] } else { $null }
         group = if ($r.DisplayGroup) { [string]$r.DisplayGroup } else { $null }
+        appCreated = ([string]$r.RuleGroup -ceq 'zagzig-tools')
     }
 }
 
@@ -4386,6 +4621,222 @@ ConvertTo-Json -InputObject ([pscustomobject]@{ profiles = $profiles; rules = $r
         }
         let payload = serde_json::json!({ "Name": name, "Enabled": enabled }).to_string();
         elevated_json::run(&toggle_worker(), &payload).await
+    }
+
+    // --- Creating and deleting this app's own rules ----------------------
+    //
+    // Every rule made here is tagged with this group, and only rules in it
+    // can be deleted here — so a mistake can never remove one of Windows' own.
+    const APP_GROUP: &str = "zagzig-tools";
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct NewRuleSpec {
+        pub name: String,
+        /// "Inbound" or "Outbound".
+        pub direction: String,
+        /// "Allow" or "Block".
+        pub action: String,
+        /// "TCP" or "UDP".
+        pub protocol: String,
+        /// "80", "80,443" or "8000-8100".
+        pub ports: String,
+        pub program: Option<String>,
+        /// Any of "Domain", "Private", "Public".
+        pub profiles: Vec<String>,
+        /// "Any" or "LocalSubnet".
+        pub remote: String,
+    }
+
+    // "80, 443,8000-8100" -> ["80", "443", "8000-8100"]
+    fn parse_port_spec(spec: &str) -> Result<Vec<String>, String> {
+        let mut out = Vec::new();
+        for part in spec.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+            let valid = |s: &str| matches!(s.trim().parse::<u16>(), Ok(n) if n >= 1);
+            match part.split_once('-') {
+                Some((a, b)) if valid(a) && valid(b) && a.trim().parse::<u16>().unwrap() <= b.trim().parse::<u16>().unwrap() => {
+                    out.push(format!("{}-{}", a.trim(), b.trim()));
+                }
+                None if valid(part) => out.push(part.to_string()),
+                _ => return Err(format!("\"{part}\" isn't a port or range between 1 and 65535.")),
+            }
+        }
+        if out.is_empty() {
+            return Err("Enter at least one port.".to_string());
+        }
+        if out.len() > 64 {
+            return Err("Too many ports or ranges (limit 64).".to_string());
+        }
+        Ok(out)
+    }
+
+    fn validate_spec(spec: &NewRuleSpec) -> Result<serde_json::Value, String> {
+        let name = spec.name.trim();
+        if name.is_empty() || name.chars().count() > 100 || name.chars().any(char::is_control) {
+            return Err("Enter a rule name (up to 100 characters).".to_string());
+        }
+        if !["Inbound", "Outbound"].contains(&spec.direction.as_str()) {
+            return Err("Unknown direction.".to_string());
+        }
+        if !["Allow", "Block"].contains(&spec.action.as_str()) {
+            return Err("Unknown action.".to_string());
+        }
+        if !["TCP", "UDP"].contains(&spec.protocol.as_str()) {
+            return Err("Unknown protocol.".to_string());
+        }
+        if !["Any", "LocalSubnet"].contains(&spec.remote.as_str()) {
+            return Err("Unknown remote address option.".to_string());
+        }
+        if spec.profiles.is_empty() || !spec.profiles.iter().all(|p| ["Domain", "Private", "Public"].contains(&p.as_str())) {
+            return Err("Choose at least one network profile.".to_string());
+        }
+        let ports = parse_port_spec(&spec.ports)?;
+        let program = spec.program.as_deref().map(str::trim).filter(|p| !p.is_empty());
+        if let Some(p) = program {
+            let absolute = p.len() > 3 && ((p.as_bytes()[1] == b':' && p.as_bytes()[2] == b'\\') || p.starts_with("\\\\"));
+            if !absolute || p.len() > 260 || p.contains('"') || p.chars().any(char::is_control) {
+                return Err("The program must be a full path such as C:\\Tools\\app.exe.".to_string());
+            }
+        }
+        let id = format!(
+            "{}-{:x}",
+            APP_GROUP,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        );
+        Ok(serde_json::json!({
+            "RuleName": id,
+            "Name": name,
+            "Direction": spec.direction,
+            "Action": spec.action,
+            "Protocol": spec.protocol,
+            "Ports": ports,
+            "Program": program,
+            "Profiles": spec.profiles,
+            "Remote": spec.remote,
+        }))
+    }
+
+    fn create_worker() -> String {
+        elevated_json::worker(&format!(
+            r#"    $p = @{{
+        Name = [string]$req.RuleName
+        DisplayName = [string]$req.Name
+        Description = 'Created by zagzig-tools'
+        Group = '{APP_GROUP}'
+        Direction = [string]$req.Direction
+        Action = [string]$req.Action
+        Protocol = [string]$req.Protocol
+        Profile = (@($req.Profiles) -join ',')
+        RemoteAddress = [string]$req.Remote
+        Enabled = 'True'
+    }}
+    # An inbound rule matches the port this PC listens on; an outbound one
+    # the port it connects to.
+    if ($req.Direction -eq 'Inbound') {{ $p.LocalPort = @($req.Ports | ForEach-Object {{ [string]$_ }}) }} else {{ $p.RemotePort = @($req.Ports | ForEach-Object {{ [string]$_ }}) }}
+    if ($req.Program) {{ $p.Program = [string]$req.Program }}
+    New-NetFirewallRule @p -ErrorAction Stop | Out-Null"#
+        ))
+    }
+
+    fn delete_worker() -> String {
+        elevated_json::worker(&format!(
+            r#"    $rules = @(Get-NetFirewallRule -Name $req.Name -ErrorAction Stop | Where-Object {{ $_.Name -ceq $req.Name }})
+    if ($rules.Count -ne 1) {{ throw 'That rule no longer exists - refresh and try again.' }}
+    if ($rules[0].Group -cne '{APP_GROUP}') {{ throw 'Only rules created by this app can be deleted here.' }}
+    $rules | Remove-NetFirewallRule -ErrorAction Stop"#
+        ))
+    }
+
+    #[tauri::command]
+    pub async fn create_firewall_rule(spec: NewRuleSpec) -> Result<(), String> {
+        let payload = validate_spec(&spec)?.to_string();
+        elevated_json::run(&create_worker(), &payload).await
+    }
+
+    #[tauri::command]
+    pub async fn delete_firewall_rule(name: String) -> Result<(), String> {
+        if !name.starts_with(&format!("{APP_GROUP}-")) || name.len() > 100 || name.chars().any(char::is_control) {
+            return Err("Only rules created by this app can be deleted here.".to_string());
+        }
+        let payload = serde_json::json!({ "Name": name }).to_string();
+        elevated_json::run(&delete_worker(), &payload).await
+    }
+
+    #[cfg(test)]
+    mod create_tests {
+        use super::*;
+
+        fn spec() -> NewRuleSpec {
+            NewRuleSpec {
+                name: "Dev server".into(),
+                direction: "Inbound".into(),
+                action: "Allow".into(),
+                protocol: "TCP".into(),
+                ports: "3000, 8000-8100".into(),
+                program: None,
+                profiles: vec!["Private".into()],
+                remote: "LocalSubnet".into(),
+            }
+        }
+
+        #[test]
+        fn parses_port_specs() {
+            assert_eq!(parse_port_spec("80, 443,8000-8100").unwrap(), vec!["80", "443", "8000-8100"]);
+            for bad in ["", "0", "65536", "abc", "10-5", "1-", "-5", "80,,x"] {
+                assert!(parse_port_spec(bad).is_err(), "{bad}");
+            }
+        }
+
+        #[test]
+        fn accepts_a_good_spec_and_builds_the_request() {
+            let json = validate_spec(&spec()).unwrap();
+            assert!(json["RuleName"].as_str().unwrap().starts_with("zagzig-tools-"));
+            assert_eq!(json["Ports"], serde_json::json!(["3000", "8000-8100"]));
+            assert_eq!(json["Program"], serde_json::Value::Null);
+        }
+
+        #[test]
+        fn rejects_bad_specs() {
+            let mut s = spec();
+            s.name = "  ".into();
+            assert!(validate_spec(&s).is_err());
+            let mut s = spec();
+            s.direction = "Sideways".into();
+            assert!(validate_spec(&s).is_err());
+            let mut s = spec();
+            s.profiles = vec![];
+            assert!(validate_spec(&s).is_err());
+            let mut s = spec();
+            s.profiles = vec!["Everywhere".into()];
+            assert!(validate_spec(&s).is_err());
+            let mut s = spec();
+            s.remote = "Internet".into();
+            assert!(validate_spec(&s).is_err());
+            let mut s = spec();
+            s.program = Some("notepad.exe".into());
+            assert!(validate_spec(&s).is_err(), "relative program paths are refused");
+            let mut s = spec();
+            s.program = Some("C:\\Tools\\app.exe".into());
+            assert!(validate_spec(&s).is_ok());
+        }
+
+        #[test]
+        fn only_this_apps_rules_can_be_deleted() {
+            let err = |n: &str| tauri::async_runtime::block_on(delete_firewall_rule(n.to_string())).unwrap_err();
+            assert!(err("CoreNet-DHCP-In").contains("created by this app"));
+            assert!(err("").contains("created by this app"));
+            assert!(delete_worker().contains("-cne 'zagzig-tools'"));
+        }
+
+        #[test]
+        fn workers_are_valid_powershell() {
+            assert_eq!(crate::powershell_syntax_errors(&create_worker()), Vec::<String>::new());
+            assert_eq!(crate::powershell_syntax_errors(&delete_worker()), Vec::<String>::new());
+            assert_eq!(crate::powershell_syntax_errors(&toggle_worker()), Vec::<String>::new());
+        }
     }
 
     #[cfg(test)]
@@ -4753,7 +5204,7 @@ foreach ($query in $queries) {
             while ($ex.InnerException) { $ex = $ex.InnerException }
             # An empty result, an uninstalled provider or a channel that
             # doesn't exist on this machine isn't a failure.
-            if ($ex.Message -notmatch 'No events were found|not an event provider|channel could not be found|specified channel') { $errorText = $ex.Message }
+            if ($ex.Message -notmatch 'No events were found|not an event provider|channel could not be found|specified channel|do not write events to any of the specified logs') { $errorText = $ex.Message }
         }
     }
 }
@@ -6743,6 +7194,726 @@ mod tls {
     }
 }
 
+// Backs the "Diagnostic Report" page: gathers what this app already knows
+// about the machine — system, adapters, DNS, routes, proxy, hosts, listening
+// ports, firewall, WSL, recent network errors — into one Markdown file for a
+// support ticket. Each section is collected concurrently and a section that
+// fails is noted instead of failing the report. Nothing secret is included
+// (no saved passwords, no environment variable values), and the report can
+// hide the computer and user names, MAC addresses and the last octet of
+// IPv4 addresses before it's shown.
+mod diagnostics {
+    use std::fmt::Write as _;
+
+    use serde::Deserialize;
+
+    use crate::run_powershell;
+
+    const SECTIONS: [&str; 11] = [
+        "system", "adapters", "dns", "nrpt", "routes", "proxy", "hosts", "ports", "firewall", "wsl", "events",
+    ];
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ReportOptions {
+        pub sections: Vec<String>,
+        /// Replace the computer and user names and mask MAC addresses.
+        pub hide_personal: bool,
+        /// Replace the last octet of IPv4 addresses with `x`.
+        pub mask_ips: bool,
+    }
+
+    // --- Formatting helpers ----------------------------------------------
+
+    fn cell(text: &str) -> String {
+        text.replace('|', "\\|").replace(['\r', '\n'], " ")
+    }
+
+    fn table(headers: &[&str], rows: Vec<Vec<String>>) -> String {
+        if rows.is_empty() {
+            return "_None._\n".to_string();
+        }
+        let mut out = format!("| {} |\n|{}\n", headers.join(" | "), " --- |".repeat(headers.len()));
+        for row in rows {
+            let _ = writeln!(out, "| {} |", row.iter().map(|c| cell(c)).collect::<Vec<_>>().join(" | "));
+        }
+        out
+    }
+
+    fn or_dash(value: &str) -> String {
+        if value.trim().is_empty() {
+            "—".to_string()
+        } else {
+            value.to_string()
+        }
+    }
+
+    fn join_or_dash(values: &[String]) -> String {
+        or_dash(&values.join(", "))
+    }
+
+    // (year, month, day, hour, minute) in UTC from Unix seconds.
+    fn civil_utc(secs: u64) -> (u64, u64, u64, u64, u64) {
+        let days = secs / 86_400;
+        let rem = secs % 86_400;
+        // Howard Hinnant's days-to-civil algorithm.
+        let z = days as i64 + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z.rem_euclid(146_097);
+        let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+        let y = yoe + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let d = doy - (153 * mp + 2) / 5 + 1;
+        let m = if mp < 10 { mp + 3 } else { mp - 9 };
+        let year = if m <= 2 { y + 1 } else { y };
+        (year as u64, m as u64, d as u64, rem / 3_600, rem % 3_600 / 60)
+    }
+
+    fn format_utc(secs: u64) -> String {
+        let (y, mo, d, h, mi) = civil_utc(secs);
+        format!("{y:04}-{mo:02}-{d:02} {h:02}:{mi:02} UTC")
+    }
+
+    // --- Redaction ---------------------------------------------------------
+
+    // Case-insensitive replace of an ASCII-or-not literal.
+    fn replace_ci(text: &str, needle: &str, with: &str) -> String {
+        if needle.chars().count() < 3 {
+            return text.to_string(); // too short to replace without mangling
+        }
+        let (lower_text, lower_needle) = (text.to_lowercase(), needle.to_lowercase());
+        // Lowercasing can change byte lengths for some scripts; fall back to
+        // leaving the text alone rather than risk slicing in the wrong place.
+        if lower_text.len() != text.len() {
+            return text.to_string();
+        }
+        let mut out = String::with_capacity(text.len());
+        let mut last = 0;
+        for (start, _) in lower_text.match_indices(&lower_needle) {
+            if start < last {
+                continue;
+            }
+            out.push_str(&text[last..start]);
+            out.push_str(with);
+            last = start + lower_needle.len();
+        }
+        out.push_str(&text[last..]);
+        out
+    }
+
+    fn is_hex(b: u8) -> bool {
+        b.is_ascii_hexdigit()
+    }
+
+    // `AA-BB-CC-DD-EE-FF` or `aa:bb:...` -> `xx-xx-xx-xx-xx-xx`.
+    fn mask_macs(text: &str) -> String {
+        let bytes = text.as_bytes();
+        let mut out = String::with_capacity(text.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if i + 17 <= bytes.len() && is_mac_at(bytes, i) {
+                out.push_str("xx-xx-xx-xx-xx-xx");
+                i += 17;
+            } else {
+                // Push the whole character, not just one byte.
+                let ch = text[i..].chars().next().unwrap();
+                out.push(ch);
+                i += ch.len_utf8();
+            }
+        }
+        out
+    }
+
+    fn is_mac_at(b: &[u8], i: usize) -> bool {
+        let sep = b[i + 2];
+        if sep != b'-' && sep != b':' {
+            return false;
+        }
+        for g in 0..6 {
+            let p = i + g * 3;
+            if !is_hex(b[p]) || !is_hex(b[p + 1]) {
+                return false;
+            }
+            if g < 5 && b[p + 2] != sep {
+                return false;
+            }
+        }
+        let before_ok = i == 0 || !(is_hex(b[i - 1]) || b[i - 1] == b'-' || b[i - 1] == b':');
+        let after_ok = i + 17 == b.len() || !(is_hex(b[i + 17]) || b[i + 17] == b'-' || b[i + 17] == b':');
+        before_ok && after_ok
+    }
+
+    // `192.168.1.20` -> `192.168.1.x` (and only real dotted quads: version
+    // strings such as 10.0.26200.1234 are left alone by the callers, which
+    // don't mask the system section, and by the octet check here).
+    fn mask_ipv4(text: &str) -> String {
+        let bytes = text.as_bytes();
+        let mut out = String::with_capacity(text.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            let starts_number = bytes[i].is_ascii_digit() && (i == 0 || !(bytes[i - 1].is_ascii_digit() || bytes[i - 1] == b'.'));
+            if starts_number {
+                if let Some((end, last_octet_start)) = ipv4_at(bytes, i) {
+                    let quad = &text[i..end];
+                    // Loopback and "any address" say nothing about the
+                    // network, and masking them just makes the report harder
+                    // to read.
+                    if quad.starts_with("127.") || quad == "0.0.0.0" {
+                        out.push_str(quad);
+                    } else {
+                        out.push_str(&text[i..last_octet_start]);
+                        out.push('x');
+                    }
+                    i = end;
+                    continue;
+                }
+            }
+            let ch = text[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+        out
+    }
+
+    // If a dotted quad starts at `i`, returns (end, start of its last octet).
+    fn ipv4_at(b: &[u8], i: usize) -> Option<(usize, usize)> {
+        let mut pos = i;
+        let mut last_start = i;
+        for octet in 0..4 {
+            let start = pos;
+            while pos < b.len() && b[pos].is_ascii_digit() && pos - start < 3 {
+                pos += 1;
+            }
+            if pos == start {
+                return None;
+            }
+            if std::str::from_utf8(&b[start..pos]).ok()?.parse::<u16>().ok()? > 255 {
+                return None;
+            }
+            last_start = start;
+            if octet < 3 {
+                if pos >= b.len() || b[pos] != b'.' {
+                    return None;
+                }
+                pos += 1;
+            }
+        }
+        // Not part of a longer number or a longer dotted sequence.
+        let follows = pos < b.len() && (b[pos].is_ascii_digit() || (b[pos] == b'.' && pos + 1 < b.len() && b[pos + 1].is_ascii_digit()));
+        if follows {
+            return None;
+        }
+        Some((pos, last_start))
+    }
+
+    struct Redactor {
+        names: Vec<(String, &'static str)>,
+        macs: bool,
+        ips: bool,
+    }
+
+    impl Redactor {
+        fn apply(&self, text: &str, mask_ips: bool) -> String {
+            let mut out = text.to_string();
+            for (name, replacement) in &self.names {
+                out = replace_ci(&out, name, replacement);
+            }
+            if self.macs {
+                out = mask_macs(&out);
+            }
+            if self.ips && mask_ips {
+                out = mask_ipv4(&out);
+            }
+            out
+        }
+    }
+
+    // --- Sections ----------------------------------------------------------
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SystemInfo {
+        os: String,
+        version: String,
+        build: String,
+        architecture: String,
+        uptime_hours: f64,
+        computer: String,
+        user: String,
+        domain: String,
+        part_of_domain: bool,
+        manufacturer: String,
+        model: String,
+        memory_gb: f64,
+        powershell: String,
+        time_zone: String,
+        culture: String,
+    }
+
+    const SYSTEM_INFO_SCRIPT: &str = include_str!("../scripts/system_info.ps1");
+
+    async fn system_section() -> Result<String, String> {
+        let raw = run_powershell(SYSTEM_INFO_SCRIPT, &[]).await?;
+        let s: SystemInfo = serde_json::from_str(&raw).map_err(|err| format!("failed to parse powershell output: {err}"))?;
+        let admin = super::system::is_administrator().await.unwrap_or(false);
+        let rows = vec![
+            vec!["App".to_string(), format!("zagzig-tools v{}", env!("CARGO_PKG_VERSION"))],
+            vec!["Windows".to_string(), format!("{} ({}, build {}, {})", s.os, s.version, s.build, s.architecture)],
+            vec!["Computer".to_string(), format!("{} — {}", s.computer, if s.part_of_domain { format!("domain {}", s.domain) } else { format!("workgroup {}", s.domain) })],
+            vec!["Signed in as".to_string(), format!("{} ({})", s.user, if admin { "administrator" } else { "standard user" })],
+            vec!["Hardware".to_string(), format!("{} {} — {} GB RAM", s.manufacturer, s.model, s.memory_gb)],
+            vec!["Uptime".to_string(), format!("{} hours", s.uptime_hours)],
+            vec!["PowerShell".to_string(), s.powershell],
+            vec!["Time zone / locale".to_string(), format!("{} / {}", s.time_zone, s.culture)],
+        ];
+        Ok(table(&["Item", "Value"], rows))
+    }
+
+    async fn adapters_section() -> Result<String, String> {
+        let adapters = super::adapters::get_network_adapters().await?;
+        let rows = adapters
+            .iter()
+            .map(|a| {
+                vec![
+                    format!("{}{}", a.name, if a.is_virtual { " (virtual)" } else { "" }),
+                    a.status.clone(),
+                    join_or_dash(&a.ipv4),
+                    join_or_dash(&a.gateways),
+                    join_or_dash(&a.dns_servers),
+                    if a.dhcp { "DHCP".to_string() } else { "static".to_string() },
+                    or_dash(a.link_speed.as_deref().unwrap_or("")),
+                    a.mtu.map(|m| m.to_string()).unwrap_or_else(|| "—".to_string()),
+                    or_dash(a.mac_address.as_deref().unwrap_or("")),
+                ]
+            })
+            .collect();
+        Ok(table(&["Adapter", "Status", "IPv4", "Gateway", "DNS", "Addressing", "Speed", "MTU", "MAC"], rows))
+    }
+
+    async fn dns_section() -> Result<String, String> {
+        let interfaces = super::dns::get_dns_settings().await?;
+        let rows = interfaces
+            .iter()
+            .map(|i| {
+                vec![
+                    i.interface_alias.clone(),
+                    i.status.clone(),
+                    join_or_dash(&i.server_addresses),
+                    if i.dhcp { "DHCP".to_string() } else { "static".to_string() },
+                ]
+            })
+            .collect();
+        Ok(table(&["Adapter", "Status", "DNS servers", "Source"], rows))
+    }
+
+    async fn nrpt_section() -> Result<String, String> {
+        let rules = super::nrpt::get_nrpt_rules().await?;
+        let rows = rules
+            .iter()
+            .map(|r| {
+                vec![
+                    or_dash(r.display_name.as_deref().unwrap_or("")),
+                    join_or_dash(&r.namespace),
+                    join_or_dash(&r.name_servers),
+                    if r.direct_access_enabled { "DirectAccess".to_string() } else { "—".to_string() },
+                ]
+            })
+            .collect();
+        Ok(table(&["Rule", "Namespace", "Name servers", "Type"], rows))
+    }
+
+    async fn routes_section() -> Result<String, String> {
+        let routes = super::routing::get_routes().await?;
+        let defaults: Vec<Vec<String>> = routes
+            .iter()
+            .filter(|r| r.destination_prefix == "0.0.0.0/0")
+            .map(|r| {
+                vec![
+                    r.next_hop.clone(),
+                    r.interface_alias.clone(),
+                    (r.route_metric + r.interface_metric).to_string(),
+                ]
+            })
+            .collect();
+        let mut out = format!("{} IPv4 routes in total. Default routes:\n\n", routes.len());
+        out.push_str(&table(&["Next hop", "Interface", "Total metric"], defaults));
+        Ok(out)
+    }
+
+    async fn proxy_section() -> Result<String, String> {
+        let p = super::proxy::get_winhttp_proxy().await?;
+        Ok(if p.enabled {
+            format!(
+                "WinHTTP proxy: **{}**; bypass: {}\n",
+                p.proxy_server.unwrap_or_default(),
+                p.bypass_list.unwrap_or_else(|| "—".to_string())
+            )
+        } else {
+            "WinHTTP proxy: direct access (none).\n".to_string()
+        })
+    }
+
+    async fn hosts_section() -> Result<String, String> {
+        let hosts = super::hosts::get_hosts_entries().await?;
+        let active: Vec<_> = hosts.entries.iter().filter(|e| e.enabled).collect();
+        let disabled = hosts.entries.len() - active.len();
+        let rows = active.iter().map(|e| vec![e.ip.clone(), e.hostnames.join(" ")]).collect();
+        let mut out = format!("{} active entries ({} disabled, not shown). Comments are left out.\n\n", active.len(), disabled);
+        out.push_str(&table(&["IP", "Hostnames"], rows));
+        Ok(out)
+    }
+
+    async fn ports_section() -> Result<String, String> {
+        let snap = super::ports::get_port_usage().await?;
+        let name_of = |pid: u32| {
+            snap.processes
+                .iter()
+                .find(|p| p.pid == pid)
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| format!("PID {pid}"))
+        };
+        let mut listening: Vec<_> = snap
+            .entries
+            .iter()
+            .filter(|e| e.protocol == "UDP" || e.state == "Listen")
+            .collect();
+        listening.sort_by_key(|e| (e.local_port, e.protocol.clone(), e.local_address.clone()));
+        let total = listening.len();
+        let rows = listening
+            .into_iter()
+            .take(120)
+            .map(|e| {
+                // IPv6 addresses are bracketed so the port isn't ambiguous.
+                let address = if e.local_address.contains(':') {
+                    format!("[{}]:{}", e.local_address, e.local_port)
+                } else {
+                    format!("{}:{}", e.local_address, e.local_port)
+                };
+                vec![e.protocol.clone(), address, name_of(e.pid), e.pid.to_string()]
+            })
+            .collect();
+        let mut out = format!("{total} listening TCP ports / UDP endpoints");
+        out.push_str(if total > 120 { " (first 120 shown):\n\n" } else { ":\n\n" });
+        out.push_str(&table(&["Proto", "Local address", "Process", "PID"], rows));
+        Ok(out)
+    }
+
+    async fn firewall_section() -> Result<String, String> {
+        let snap = super::firewall::get_firewall().await?;
+        let profiles = snap
+            .profiles
+            .iter()
+            .map(|p| format!("{}: {}", p.name, if p.enabled { "on" } else { "off" }))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let enabled: Vec<_> = snap.rules.iter().filter(|r| r.enabled).collect();
+        let blocks = enabled.iter().filter(|r| r.action == "Block").count();
+        Ok(format!(
+            "Profiles — {profiles}.\n\n{} rules, {} enabled ({} of them block rules).\n",
+            snap.rules.len(),
+            enabled.len(),
+            blocks
+        ))
+    }
+
+    async fn wsl_section() -> Result<String, String> {
+        let s = super::wsl::get_wsl_status().await?;
+        let mut out = String::new();
+        if !s.installed {
+            out.push_str("WSL isn't installed.\n");
+        } else if s.unresponsive {
+            out.push_str("**WSL is not responding** (the status check timed out).\n");
+        } else {
+            let rows = s
+                .distros
+                .iter()
+                .map(|d| {
+                    vec![
+                        format!("{}{}", d.name, if d.is_default { " (default)" } else { "" }),
+                        if d.running { "Running".to_string() } else { "Stopped".to_string() },
+                        format!("WSL {}", d.version),
+                    ]
+                })
+                .collect();
+            out.push_str(&table(&["Distribution", "State", "Version"], rows));
+        }
+        let _ = writeln!(
+            out,
+            "\nDocker Desktop: {}.",
+            match (s.docker_desktop.installed, s.docker_desktop.running) {
+                (false, _) => "not installed",
+                (true, true) => "installed, running",
+                (true, false) => "installed, not running",
+            }
+        );
+        let c = &s.settings;
+        let set: Vec<String> = [
+            ("memory", &c.memory),
+            ("processors", &c.processors),
+            ("swap", &c.swap),
+            ("networkingMode", &c.networking_mode),
+            ("autoMemoryReclaim", &c.auto_memory_reclaim),
+            ("localhostForwarding", &c.localhost_forwarding),
+            ("nestedVirtualization", &c.nested_virtualization),
+        ]
+        .iter()
+        .filter_map(|(k, v)| v.as_ref().map(|v| format!("{k}={v}")))
+        .collect();
+        let _ = writeln!(out, ".wslconfig: {}.", if set.is_empty() { "defaults".to_string() } else { set.join(", ") });
+        Ok(out)
+    }
+
+    async fn events_section() -> Result<String, String> {
+        let result = super::eventlog::get_event_log("network".to_string(), "warnings".to_string(), 24, 25, None).await?;
+        if let Some(err) = &result.error {
+            return Ok(format!("_The event log reported: {err}_\n"));
+        }
+        if result.events.is_empty() {
+            return Ok("No network or DNS errors or warnings in the last 24 hours.\n".to_string());
+        }
+        let mut out = String::from("Network and DNS errors and warnings from the last 24 hours (newest first, up to 25):\n\n");
+        for e in &result.events {
+            let level = match e.level {
+                1 => "Critical",
+                2 => "Error",
+                _ => "Warning",
+            };
+            let first_line: String = e.message.lines().next().unwrap_or("").chars().take(200).collect();
+            let _ = writeln!(out, "- `{}` **{level}** {} #{}: {}", e.time.get(..16).unwrap_or(&e.time), e.provider, e.id, first_line);
+        }
+        Ok(out)
+    }
+
+    fn title(id: &str) -> &'static str {
+        match id {
+            "system" => "System",
+            "adapters" => "Network adapters",
+            "dns" => "DNS client settings",
+            "nrpt" => "NRPT rules",
+            "routes" => "Routes",
+            "proxy" => "Proxy",
+            "hosts" => "Hosts file",
+            "ports" => "Listening ports",
+            "firewall" => "Firewall",
+            "wsl" => "WSL and Docker",
+            _ => "Recent network errors",
+        }
+    }
+
+    async fn section(id: &str) -> Result<String, String> {
+        match id {
+            "system" => system_section().await,
+            "adapters" => adapters_section().await,
+            "dns" => dns_section().await,
+            "nrpt" => nrpt_section().await,
+            "routes" => routes_section().await,
+            "proxy" => proxy_section().await,
+            "hosts" => hosts_section().await,
+            "ports" => ports_section().await,
+            "firewall" => firewall_section().await,
+            "wsl" => wsl_section().await,
+            "events" => events_section().await,
+            _ => Err("Unknown section.".to_string()),
+        }
+    }
+
+    fn redactor(options: &ReportOptions) -> Redactor {
+        let mut names = Vec::new();
+        if options.hide_personal {
+            for (var, replacement) in [("COMPUTERNAME", "<computer>"), ("USERNAME", "<user>")] {
+                if let Ok(value) = std::env::var(var) {
+                    if !value.trim().is_empty() {
+                        names.push((value, replacement));
+                    }
+                }
+            }
+        }
+        Redactor { names, macs: options.hide_personal, ips: options.mask_ips }
+    }
+
+    fn assemble(options: &ReportOptions, generated: u64, bodies: Vec<(String, Result<String, String>)>) -> String {
+        let redactor = redactor(options);
+        let mut out = String::new();
+        let _ = writeln!(out, "# zagzig-tools diagnostic report\n");
+        let _ = writeln!(
+            out,
+            "Generated {} by zagzig-tools v{}.\n",
+            format_utc(generated),
+            env!("CARGO_PKG_VERSION")
+        );
+        let mut hidden = Vec::new();
+        if options.hide_personal {
+            hidden.push("computer and user names and MAC addresses");
+        }
+        if options.mask_ips {
+            hidden.push("the last part of IPv4 addresses");
+        }
+        let _ = writeln!(
+            out,
+            "> Contains no passwords or environment variable values. {}\n",
+            if hidden.is_empty() {
+                "Nothing has been hidden — review it before sharing.".to_string()
+            } else {
+                format!("Hidden: {}.", hidden.join("; "))
+            }
+        );
+        for (id, result) in bodies {
+            let _ = writeln!(out, "## {}\n", title(&id));
+            let body = match result {
+                Ok(body) => body,
+                Err(err) => format!("_Couldn't collect this section: {}_\n", err.lines().next().unwrap_or("unknown error")),
+            };
+            // The system section carries version numbers that look like IPs.
+            out.push_str(&redactor.apply(&body, id != "system"));
+            out.push('\n');
+        }
+        out
+    }
+
+    #[tauri::command]
+    pub async fn build_diagnostic_report(options: ReportOptions) -> Result<String, String> {
+        // Keep the canonical order whatever order the UI sent.
+        let ids: Vec<&str> = SECTIONS.iter().copied().filter(|s| options.sections.iter().any(|o| o == s)).collect();
+        if ids.is_empty() {
+            return Err("Choose at least one section.".to_string());
+        }
+        let handles: Vec<_> = ids
+            .iter()
+            .map(|id| {
+                let id = id.to_string();
+                tauri::async_runtime::spawn(async move {
+                    let result = section(&id).await;
+                    (id, result)
+                })
+            })
+            .collect();
+        let mut bodies = Vec::new();
+        for handle in handles {
+            bodies.push(handle.await.map_err(|err| format!("report task failed to run: {err}"))?);
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        Ok(assemble(&options, now, bodies))
+    }
+
+    #[tauri::command]
+    pub async fn save_text_report(path: String, content: String) -> Result<(), String> {
+        let target = std::path::PathBuf::from(&path);
+        let ok_ext = target
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("txt"));
+        if !ok_ext {
+            return Err("The file name must end in .md or .txt.".to_string());
+        }
+        if content.len() > 5 * 1024 * 1024 {
+            return Err("The report is too large.".to_string());
+        }
+        tauri::async_runtime::spawn_blocking(move || {
+            std::fs::write(&target, content).map_err(|err| format!("couldn't save the report: {err}"))
+        })
+        .await
+        .map_err(|err| format!("save task failed to run: {err}"))?
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn formats_utc_times() {
+            assert_eq!(format_utc(0), "1970-01-01 00:00 UTC");
+            assert_eq!(format_utc(1_700_000_000), "2023-11-14 22:13 UTC");
+            assert_eq!(format_utc(1_791_251_559), "2026-10-06 01:52 UTC");
+        }
+
+        #[test]
+        fn masks_mac_addresses() {
+            assert_eq!(mask_macs("NIC 38-A7-46-73-8E-F8 up"), "NIC xx-xx-xx-xx-xx-xx up");
+            assert_eq!(mask_macs("a0:b1:c2:d3:e4:f5"), "xx-xx-xx-xx-xx-xx");
+            // Not MACs: too short, mixed separators, part of a longer run.
+            for keep in ["38-A7-46-73-8E", "38-A7:46-73-8E-F8", "138-A7-46-73-8E-F8-00", "text only"] {
+                assert_eq!(mask_macs(keep), keep, "{keep}");
+            }
+            assert_eq!(mask_macs("Jos\u{e9} 38-A7-46-73-8E-F8"), "Jos\u{e9} xx-xx-xx-xx-xx-xx");
+        }
+
+        #[test]
+        fn masks_the_last_ipv4_octet_only() {
+            assert_eq!(mask_ipv4("gateway 192.168.1.254, dns 10.0.0.1"), "gateway 192.168.1.x, dns 10.0.0.x");
+            assert_eq!(mask_ipv4("172.16.28.48/24"), "172.16.28.x/24");
+            assert_eq!(mask_ipv4("127.0.0.1 and 0.0.0.0 and 127.1.2.3"), "127.0.0.1 and 0.0.0.0 and 127.1.2.3");
+            for keep in ["10.0.26200.1234.5", "999.1.1.1", "1.2.3", "v1.2.3.4.5", "no ips here", "300.1.1.1"] {
+                assert_eq!(mask_ipv4(keep), keep, "{keep}");
+            }
+        }
+
+        #[test]
+        fn replaces_names_case_insensitively_but_not_tiny_ones() {
+            assert_eq!(replace_ci(r"C:\Users\Rafli.Athala\x and rafli.athala", "rafli.athala", "<user>"), r"C:\Users\<user>\x and <user>");
+            assert_eq!(replace_ci("a b ab", "ab", "<x>"), "a b ab", "names under three characters are left alone");
+        }
+
+        fn options(hide: bool, ips: bool) -> ReportOptions {
+            ReportOptions { sections: vec!["system".into()], hide_personal: hide, mask_ips: ips }
+        }
+
+        #[test]
+        fn assembles_a_report_with_failures_and_redaction() {
+            std::env::set_var("COMPUTERNAME", "TESTBOX");
+            let bodies = vec![
+                ("system".to_string(), Ok("Windows 10.0.26200.1234 on TESTBOX\n".to_string())),
+                ("adapters".to_string(), Ok("TESTBOX 192.168.1.20 38-A7-46-73-8E-F8\n".to_string())),
+                ("wsl".to_string(), Err("wsl.exe failed\nsecond line".to_string())),
+            ];
+            let hidden = assemble(&options(true, true), 0, bodies.clone());
+            assert!(hidden.contains("## System") && hidden.contains("Windows 10.0.26200.1234 on <computer>"), "{hidden}");
+            assert!(hidden.contains("<computer> 192.168.1.x xx-xx-xx-xx-xx-xx"), "{hidden}");
+            assert!(hidden.contains("_Couldn't collect this section: wsl.exe failed_"));
+            assert!(hidden.contains("Hidden: computer and user names and MAC addresses; the last part of IPv4 addresses."));
+
+            let plain = assemble(&options(false, false), 0, bodies);
+            assert!(plain.contains("TESTBOX 192.168.1.20 38-A7-46-73-8E-F8"));
+            assert!(plain.contains("Nothing has been hidden"));
+        }
+
+        #[test]
+        fn tables_escape_pipes_and_newlines() {
+            let t = table(&["a", "b"], vec![vec!["x|y".into(), "line1\nline2".into()]]);
+            assert!(t.contains("x\\|y") && t.contains("line1 line2"));
+            assert_eq!(table(&["a"], vec![]), "_None._\n");
+        }
+
+        // Gathers every section from the machine the tests run on, so it's
+        // opt-in: `cargo test -- --ignored --nocapture real_report`.
+        #[test]
+        #[ignore]
+        fn real_report() {
+            let options = ReportOptions {
+                sections: SECTIONS.iter().map(|s| s.to_string()).collect(),
+                hide_personal: true,
+                mask_ips: true,
+            };
+            let started = std::time::Instant::now();
+            let report = tauri::async_runtime::block_on(build_diagnostic_report(options)).unwrap();
+            println!("{report}\n--- generated in {:.1}s, {} bytes", started.elapsed().as_secs_f32(), report.len());
+            if let Ok(path) = std::env::var("ZAGZIG_REPORT_OUT") {
+                std::fs::write(path, &report).unwrap();
+            }
+        }
+
+        #[test]
+        fn refuses_an_empty_selection_and_bad_extensions() {
+            let empty = ReportOptions { sections: vec![], hide_personal: true, mask_ips: false };
+            assert!(tauri::async_runtime::block_on(build_diagnostic_report(empty)).is_err());
+            assert!(tauri::async_runtime::block_on(save_text_report("C:\\x\\report.exe".into(), "x".into())).is_err());
+        }
+    }
+}
+
 // Backs the "Proxy Settings" feature: the WinHTTP proxy (`netsh winhttp`) is
 // a separate, machine-wide setting from the browser/"Internet Options" proxy
 // that Settings exposes — plenty of things (Windows Update's underlying
@@ -7149,6 +8320,200 @@ try {
         }
     }
 
+    // --- Importing a certificate file ------------------------------------
+    //
+    // Two steps, so nothing is trusted blind: `inspect_certificate_file`
+    // reads a file and reports what's in it (nothing is written anywhere),
+    // then `import_certificate` adds it to a store once the user has seen
+    // that and confirmed. A LocalMachine store needs elevation; a
+    // CurrentUser one doesn't (Windows itself shows a confirmation for
+    // CurrentUser\Root).
+
+    const CERT_LOAD_SCRIPT: &str = include_str!("../scripts/cert_load.ps1");
+    const CERT_INSPECT_SCRIPT: &str = include_str!("../scripts/cert_inspect.ps1");
+    const CERT_IMPORT_CORE: &str = include_str!("../scripts/cert_import.ps1");
+
+    const MAX_CERT_FILE_BYTES: u64 = 5 * 1024 * 1024;
+    const CERT_FILE_EXTENSIONS: [&str; 8] = ["cer", "crt", "der", "pem", "p7b", "p7c", "pfx", "p12"];
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct CertFileCert {
+        pub subject: String,
+        pub issuer: String,
+        pub thumbprint: String,
+        pub not_before: String,
+        pub not_after: String,
+        pub self_signed: bool,
+        pub is_ca: bool,
+        pub has_private_key: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct CertFileInfo {
+        #[serde(default, deserialize_with = "crate::value_or_vec")]
+        pub certs: Vec<CertFileCert>,
+        pub needs_password: bool,
+        pub error: Option<String>,
+    }
+
+    fn check_cert_file(path: &str) -> Result<(), String> {
+        let p = std::path::Path::new(path);
+        let extension = p
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_default();
+        if !CERT_FILE_EXTENSIONS.contains(&extension.as_str()) {
+            return Err("Choose a certificate file (.cer, .crt, .der, .pem, .p7b, .pfx or .p12).".to_string());
+        }
+        let meta = std::fs::metadata(p).map_err(|err| format!("Couldn't read the file: {err}"))?;
+        if !meta.is_file() {
+            return Err("That isn't a file.".to_string());
+        }
+        if meta.len() > MAX_CERT_FILE_BYTES {
+            return Err("The file is larger than 5 MB.".to_string());
+        }
+        Ok(())
+    }
+
+    #[tauri::command]
+    pub async fn inspect_certificate_file(path: String, password: Option<String>) -> Result<CertFileInfo, String> {
+        check_cert_file(&path)?;
+        let password = password.unwrap_or_default();
+        let script = format!("{CERT_LOAD_SCRIPT}\n{CERT_INSPECT_SCRIPT}");
+        let trimmed = run_powershell(
+            &script,
+            &[("ZAGZIG_CERT_FILE", path.as_str()), ("ZAGZIG_CERT_PASSWORD", password.as_str())],
+        )
+        .await?;
+        serde_json::from_str(&trimmed).map_err(|err| format!("failed to parse powershell output: {err}"))
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ImportResult {
+        pub count: u32,
+        pub thumbprints: Vec<String>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct ImportReply {
+        success: bool,
+        #[serde(default)]
+        error: Option<String>,
+        #[serde(default)]
+        count: u32,
+        #[serde(default, deserialize_with = "string_or_vec")]
+        thumbprints: Vec<String>,
+    }
+
+    fn import_user_script() -> String {
+        format!(
+            r#"{CERT_LOAD_SCRIPT}
+$ErrorActionPreference = 'Stop'
+try {{
+    $req = ConvertFrom-Json -InputObject $env:ZAGZIG_CERT_IMPORT_REQUEST
+    $result = & {{ {CERT_IMPORT_CORE} }}
+    $result | ConvertTo-Json -Compress
+}} catch {{
+    $ex = $_.Exception
+    while ($ex.InnerException) {{ $ex = $ex.InnerException }}
+    @{{ Success = $false; Error = $ex.Message }} | ConvertTo-Json -Compress
+}}
+"#
+        )
+    }
+
+    fn import_machine_worker() -> String {
+        format!(
+            r#"
+param(
+    [Parameter(Mandatory)] [string]$InputPath,
+    [Parameter(Mandatory)] [string]$OutputPath
+)
+$ErrorActionPreference = 'Stop'
+try {{
+    {CERT_LOAD_SCRIPT}
+    $req = Get-Content -Raw -LiteralPath $InputPath | ConvertFrom-Json
+    $result = & {{ {CERT_IMPORT_CORE} }}
+    $result | ConvertTo-Json -Compress | Set-Content -LiteralPath $OutputPath
+}} catch {{
+    $ex = $_.Exception
+    while ($ex.InnerException) {{ $ex = $ex.InnerException }}
+    @{{ Success = $false; Error = $ex.Message }} | ConvertTo-Json -Compress | Set-Content -LiteralPath $OutputPath
+}}
+"#
+        )
+    }
+
+    #[tauri::command]
+    pub async fn import_certificate(
+        scope: String,
+        store: String,
+        path: String,
+        password: Option<String>,
+    ) -> Result<ImportResult, String> {
+        // Validates the pair; `store` is then one of the four fixed names.
+        cert_store_path(&scope, &store)?;
+        check_cert_file(&path)?;
+
+        let request = serde_json::json!({
+            "Path": path,
+            "Password": password.unwrap_or_default(),
+            "Scope": scope,
+            "Store": store,
+        })
+        .to_string();
+
+        let raw = if scope == "LocalMachine" {
+            run_elevated(&import_machine_worker(), &request).await?
+        } else {
+            run_powershell(&import_user_script(), &[("ZAGZIG_CERT_IMPORT_REQUEST", request.as_str())]).await?
+        };
+        let reply: ImportReply = serde_json::from_str(raw.trim())
+            .map_err(|err| format!("failed to parse powershell output: {err}"))?;
+        if reply.success {
+            Ok(ImportResult { count: reply.count, thumbprints: reply.thumbprints })
+        } else {
+            Err(reply.error.unwrap_or_else(|| "Unknown error.".to_string()))
+        }
+    }
+
+    #[cfg(test)]
+    mod import_tests {
+        use super::*;
+
+        #[test]
+        fn import_scripts_are_valid_powershell() {
+            assert_eq!(crate::powershell_syntax_errors(&import_user_script()), Vec::<String>::new());
+            assert_eq!(crate::powershell_syntax_errors(&import_machine_worker()), Vec::<String>::new());
+            assert_eq!(
+                crate::powershell_syntax_errors(&format!("{CERT_LOAD_SCRIPT}\n{CERT_INSPECT_SCRIPT}")),
+                Vec::<String>::new()
+            );
+        }
+
+        #[test]
+        fn only_certificate_files_are_accepted() {
+            assert!(check_cert_file("C:\\x\\a.txt").is_err());
+            assert!(check_cert_file("C:\\x\\a.exe").is_err());
+            assert!(check_cert_file("C:\\definitely\\missing\\a.cer").is_err());
+        }
+
+        #[test]
+        fn parses_replies() {
+            let ok: ImportReply = serde_json::from_str(r#"{"Success":true,"Count":2,"Thumbprints":["A","B"]}"#).unwrap();
+            assert!(ok.success && ok.count == 2 && ok.thumbprints.len() == 2);
+            let one: ImportReply = serde_json::from_str(r#"{"Success":true,"Count":1,"Thumbprints":"A"}"#).unwrap();
+            assert_eq!(one.thumbprints, vec!["A"]);
+            let info: CertFileInfo = serde_json::from_str(r#"{"certs":[],"needsPassword":true,"error":null}"#).unwrap();
+            assert!(info.needs_password && info.certs.is_empty());
+        }
+    }
+
     // Exports the public certificate only (.cer) — reading any store and
     // writing to a user-chosen destination both need no elevation, unlike
     // deleting from a LocalMachine store above.
@@ -7362,5 +8727,30 @@ Get-Content -Raw -Encoding UTF8 -LiteralPath $env:O"#;
         let parsed: serde_json::Value = serde_json::from_str(&out.unwrap()).unwrap();
         assert_eq!(parsed["Echo"], SAMPLE, "the request survived the trip in and out");
         assert_eq!(parsed["Literal"], "Jos\u{e9} \u{2014}", "a literal inside the worker script survived");
+    }
+}
+
+// Runs a script through PowerShell's own parser (without executing it) and
+// returns any syntax errors. Elevated workers can't be exercised in tests —
+// they need a UAC prompt — so this at least guarantees every generated
+// script is valid PowerShell.
+#[cfg(test)]
+pub(crate) fn powershell_syntax_errors(script: &str) -> Vec<String> {
+    let checker = "$tokens = $null; $errs = $null; \
+        [void][System.Management.Automation.Language.Parser]::ParseInput($env:ZAGZIG_SYNTAX_SCRIPT, [ref]$tokens, [ref]$errs); \
+        foreach ($e in $errs) { \"line $($e.Extent.StartLineNumber): $($e.Message)\" }";
+    let out = tauri::async_runtime::block_on(run_powershell(checker, &[("ZAGZIG_SYNTAX_SCRIPT", script)]))
+        .expect("the syntax checker itself failed to run");
+    out.lines().map(str::to_string).filter(|l| !l.trim().is_empty()).collect()
+}
+
+#[cfg(test)]
+mod script_syntax_tests {
+    use super::*;
+
+    #[test]
+    fn the_checker_catches_a_broken_script() {
+        assert!(powershell_syntax_errors("if ($x { 'unclosed'").len() > 0);
+        assert!(powershell_syntax_errors("$x = 1; $x + 1").is_empty());
     }
 }

@@ -1,4 +1,6 @@
 import { useState } from "react";
+
+import { SavedTargets } from "@/components/saved-targets";
 import { invoke } from "@tauri-apps/api/core";
 import { Loader2, Radar, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -483,6 +485,7 @@ export function ConnectionTestPage() {
 
       <Card>
         <CardContent className="flex flex-col gap-4">
+          <SavedTargets current={{ host: target }} onLoad={(saved) => setTarget(saved.host)} />
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="target">{t("connectionTest.addressLabel")}</Label>
             <Input
