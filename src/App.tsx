@@ -1,5 +1,5 @@
-import { Suspense, lazy, useState } from "react";
-import { ArrowLeft, Star } from "lucide-react";
+import { Suspense, lazy, useEffect, useState } from "react";
+import { ArrowLeft, Search, Star } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
+import { CommandPalette } from "@/components/command-palette";
 import { LanguageSwitcher } from "@/components/language-switcher";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import { AdminStatusBadge } from "@/components/admin-status-badge";
@@ -74,6 +75,18 @@ function App() {
     .map((id) => navGroups.flatMap((g) => g.items).find((i) => i.id === id))
     .filter((i): i is NavItem => !!i);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteOpen((open) => !open);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   const navigate = (id: NavId) => {
     setActive(id);
@@ -179,7 +192,19 @@ function App() {
                 {t("nav.backToDashboard")}
               </Button>
             )}
-            <div className="ml-auto">
+            <div className="ml-auto flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPaletteOpen(true)}
+                aria-label={t("palette.open")}
+                title={t("palette.open")}
+                className="text-muted-foreground"
+              >
+                <Search />
+                <span className="hidden sm:inline">{t("palette.open")}</span>
+                <kbd className="rounded border px-1 text-[10px] font-normal">Ctrl K</kbd>
+              </Button>
               <AdminStatusBadge />
             </div>
           </header>
@@ -221,6 +246,11 @@ function App() {
             {active === "certificate-store" && <CertificatesPage />}
           </main>
         </SidebarInset>
+        <CommandPalette
+          open={paletteOpen}
+          onOpenChange={setPaletteOpen}
+          onNavigate={navigate}
+        />
       </SidebarProvider>
     </div>
   );

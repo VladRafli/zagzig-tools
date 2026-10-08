@@ -94,6 +94,14 @@ const id: typeof en = {
     codeSigning: "Penandatanganan Kode",
     certificateStore: "Penyimpanan Sertifikat",
   },
+  palette: {
+    open: "Cari",
+    title: "Buka sebuah fitur",
+    description: "Ketik nama fitur, lalu tekan Enter untuk membukanya.",
+    placeholder: "Buka sebuah fitur…",
+    empty: "Tidak ada fitur yang cocok.",
+    hint: "↑↓ untuk berpindah, Enter untuk membuka, Esc untuk menutup",
+  },
   dashboard: {
     title: "Dasbor",
     subtitle:

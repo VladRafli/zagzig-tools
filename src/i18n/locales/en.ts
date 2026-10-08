@@ -92,6 +92,14 @@ const en = {
     codeSigning: "Code Signing",
     certificateStore: "Certificate Store",
   },
+  palette: {
+    open: "Search",
+    title: "Go to a feature",
+    description: "Type a feature name, then press Enter to open it.",
+    placeholder: "Go to a feature…",
+    empty: "No feature matches.",
+    hint: "↑↓ to move, Enter to open, Esc to close",
+  },
   dashboard: {
     title: "Dashboard",
     subtitle:
