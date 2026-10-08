@@ -13,11 +13,55 @@ dependency and runs on Linux too — see below.
 Looking for how to use the app rather than how it's built? See the
 [user manual](./docs/user-manual.md) ([PDF](./docs/user-manual.pdf)).
 
+## Installing
+
+**Desktop app (Windows):** download the `.msi` or `-setup.exe` installer from the
+[latest release](https://github.com/VladRafli/zagzig-tools/releases/latest) and run it. No
+administrator rights are needed to install. The app updates itself afterwards.
+
+**Terminal UI:** one command downloads the latest release, checks its SHA-256 against
+`checksums.txt` and puts `zagzig-tui` on your PATH, with no administrator rights or root.
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/VladRafli/zagzig-tools/main/install.ps1 | iex
+```
+
+Linux (needs `curl` or `wget`, and `unzip`):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/VladRafli/zagzig-tools/main/install.sh | sh
+```
+
+Then run `zagzig-tui`. Windows installs to `%LOCALAPPDATA%\Programs\zagzig-tui` and Linux to
+`~/.local/bin`. Both scripts read these optional environment variables:
+
+| Variable | Effect |
+| --- | --- |
+| `ZAGZIG_VERSION` | Install a specific version, like `0.14.0` (default: the latest) |
+| `ZAGZIG_INSTALL_DIR` | Install into this folder instead |
+| `ZAGZIG_NO_PATH` | Windows only: set to `1` to leave your PATH alone |
+
+For example, to install 0.14.0:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/VladRafli/zagzig-tools/main/install.sh | ZAGZIG_VERSION=0.14.0 sh
+```
+
+```powershell
+$env:ZAGZIG_VERSION = "0.14.0"; irm https://raw.githubusercontent.com/VladRafli/zagzig-tools/main/install.ps1 | iex
+```
+
+Read a script before piping it into a shell if you prefer: [`install.sh`](./install.sh),
+[`install.ps1`](./install.ps1). Prefer to do it by hand? Each release also has
+`zagzig-tui-x86_64-pc-windows-msvc.zip` and `zagzig-tui-x86_64-unknown-linux-gnu.zip`.
+
 ## Features
 
 | Feature | What it does |
 | --- | --- |
-| Dashboard | A grid of icons for every feature, with starred features kept on top (also at the top of the sidebar) |
+| Dashboard | A grid of icons for every feature, with starred features kept on top (also at the top of the sidebar); `Ctrl+K` jumps to any feature by name |
 | User Manual | This project's user manual, built into the app with a searchable table of contents (English only) |
 | Languages | English and Indonesian built in; add any other language as a JSON file — export a template, translate it, import it, no rebuild needed |
 | NRPT Rules | View Name Resolution Policy Table rules — what `Add-DnsClientNrptRule` configures |
@@ -61,7 +105,7 @@ functionality — Dashboard, Connection Test, DNS Servers, DNS Monitor, Ports, H
 SSH sessions, or anyone who'd rather stay in a terminal. It's a separate Rust binary with its own
 `Cargo.toml`, not a Tauri window; see [`tui/`](./tui).
 
-Runs on **Windows and Linux** — each release ships a `zagzig-tui-x86_64-pc-windows-msvc.zip` and a
+See [Installing](#installing) for the one-line installers. Runs on **Windows and Linux** — each release ships a `zagzig-tui-x86_64-pc-windows-msvc.zip` and a
 `zagzig-tui-x86_64-unknown-linux-gnu.zip` (built by the `release-windows` and `tui-linux` jobs in
 `.github/workflows/release.yml` respectively). The platform-specific bits (reading DNS servers,
 the permission-denied hint for raw ICMP sockets) are isolated behind `#[cfg(target_os = ...)]` in

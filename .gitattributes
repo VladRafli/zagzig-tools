@@ -4,3 +4,6 @@
 *.pub binary
 
 *.pdf binary
+
+# The installer is piped straight into sh, so CRLF would break it.
+install.sh text eol=lf

@@ -37,13 +37,29 @@ Either one adds a Start Menu shortcut. Installing and daily use need no administ
 
 ### Terminal UI (Windows or Linux)
 
-Download and unzip the one that matches your machine:
+**One command:** the installer downloads the latest release, checks its SHA-256 and puts the program
+on your PATH. No administrator rights or root needed.
+
+```powershell
+irm https://raw.githubusercontent.com/VladRafli/zagzig-tools/main/install.ps1 | iex
+```
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/VladRafli/zagzig-tools/main/install.sh | sh
+```
+
+The first is for Windows (PowerShell), the second for Linux. Set `ZAGZIG_VERSION` (like `0.14.0`)
+first to install a specific version, or `ZAGZIG_INSTALL_DIR` to choose the folder. Windows installs to
+`%LOCALAPPDATA%\Programs\zagzig-tui` and Linux to `~/.local/bin`. Read a script before piping it
+into a shell if you prefer, since both are short.
+
+**By hand:** download and unzip the one that matches your machine:
 
 - `zagzig-tui-x86_64-pc-windows-msvc.zip` gives `zagzig-tui.exe`
 - `zagzig-tui-x86_64-unknown-linux-gnu.zip` gives `zagzig-tui`
 
-There is no installer. Run the binary from a terminal (`.\zagzig-tui.exe` on Windows, `./zagzig-tui`
-on Linux, after `chmod +x zagzig-tui` if needed).
+Then run the binary from a terminal (`.\zagzig-tui.exe` on Windows, `./zagzig-tui` on Linux, after
+`chmod +x zagzig-tui` if needed).
 
 ### Verifying your download
 
@@ -65,6 +81,11 @@ the Dashboard and opens when you pick a feature. The **Dashboard** button in the
 and the button at its left toggles the sidebar (`Ctrl+B` too). The top bar also shows your
 administrator status. The sidebar footer has the update control, theme switcher and language
 switcher.
+
+**Quick search:** press `Ctrl+K` (or click **Search** in the top bar) from any page, type part of a
+feature name and press `Enter` to open it. `↑`/`↓` move through the results and `Esc` closes it.
+Letters in order also match, so `dnsm` finds DNS Monitor. With nothing typed, starred features come
+first.
 
 This manual is built into the app under **User Manual** (searchable, English only).
 
