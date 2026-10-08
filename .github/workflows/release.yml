@@ -47,14 +47,16 @@ jobs:
           releaseName: "zagzig-tools ${{ github.ref_name }}"
           # NOTE: this is a static, per-release description — update it
           # before tagging each release (it's plain text, not generated from
-          # commits/changelog). What's below describes v0.14.0 specifically.
+          # commits/changelog). What's below describes v0.15.0 specifically.
           releaseBody: |
-            ## What's new in v0.14.0
+            ## What's new in v0.15.0
 
-            - **NRPT rules can now be created**: the New rule form adds the rule to Windows (one
-              UAC prompt) instead of only keeping it in the session.
-            - **Terminal UI**: new Ports screen (what listens on which port, with the process) and
-              a read-only Hosts File screen, both with scrolling and a text filter.
+            - **Command palette**: press `Ctrl+K` (or click Search in the top bar) from any page,
+              type part of a feature's name and press Enter to open it. Starred features come
+              first.
+            - **One-line installers for the terminal UI**: `install.ps1` (Windows PowerShell) and
+              `install.sh` (Linux) download the latest release, check its SHA-256 and put
+              `zagzig-tui` on your PATH. See the README for the commands.
             - **Manual**: the PDF is regenerated to match the current built-in manual.
 
             See the assets below to download this release.
