@@ -350,6 +350,10 @@ immediate.
   enable, disable and delete, plus an add form.
 - **Raw editor:** the whole file as text, for anything the table doesn't understand. Saving replaces
   the file.
+- **Safe writes:** every change is written to a temporary file, checked, then swapped in, and the
+  original is put back if anything fails afterwards. An empty save is refused, so a failed or
+  cancelled change can't leave the file empty. A short log of each write (time, reason, sizes, any
+  error, never the content) is kept in `hosts-write.log` in the app's data folder.
 - **Reordering:** drag an entry by its grip and drop it on another row to move it above (dragging up)
   or below (dragging down). Drop on the first or last row for the very top or bottom. Comments and
   blank lines stay put. One UAC prompt per move.
@@ -357,6 +361,21 @@ immediate.
   unless it matches the newest one. The newest 30 are kept in the app's data folder. **Back up now**
   makes one on demand. **Compare / restore** shows the lines a restore would add and remove before you
   confirm. A restore backs up the current file first, so it can be undone. Backups include comments.
+
+- **Sync to WSL:** copies the active entries of this file into a WSL distribution's `/etc/hosts`, so
+  names you set here also resolve inside Linux. No administrator rights needed. Open **Sync to WSL**
+  at the bottom of the page and, for a distribution, click **Sync now**. The copy sits in a marked
+  block (`# BEGIN zagzig-tools hosts` to `# END`), `localhost` lines and entries that `/etc/hosts`
+  couldn't hold are left out, and the rest of the file is untouched. A stopped distribution is started
+  by the sync. The trash button removes the block again.
+
+  WSL rebuilds `/etc/hosts` every time a distribution starts, which would drop the block. Turn on
+  **Keep synced at every start** to install a small script (`/usr/local/sbin/zagzig-hosts-sync`) that
+  `/etc/wsl.conf` runs at each start and that copies the current Windows entries, so later changes
+  arrive without syncing again. It takes effect from the next start. WSL runs only one boot command, so
+  the switch stays off, with the reason shown, if the distribution already has another one. Turning it
+  off removes the script and the `wsl.conf` line. The first time the app changes `/etc/hosts` or
+  `/etc/wsl.conf` it keeps a copy next to it as `.zagzig-backup`.
 
 ### SSH Config
 

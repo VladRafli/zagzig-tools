@@ -29,6 +29,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { CollapsibleDetails } from "@/components/collapsible-details";
 import { HostsBackups } from "@/features/hosts/hosts-backups";
+import { WslHostsSync } from "@/features/hosts/wsl-hosts-sync";
 import { useHostsFile, type HostsEntry } from "@/features/hosts/use-hosts-file";
 import { formatRelativeTime } from "@/lib/relative-time";
 import { useIsAdministrator } from "@/lib/use-is-administrator";
@@ -568,6 +569,12 @@ export function HostsPage() {
             isAdministrator={isAdministrator}
             onRestored={hosts.refresh}
           />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent>
+          <WslHostsSync activeEntries={hosts.entries.filter((e) => e.enabled).length} />
         </CardContent>
       </Card>
     </div>

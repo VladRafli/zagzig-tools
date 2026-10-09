@@ -76,7 +76,7 @@ Read a script before piping it into a shell if you prefer: [`install.sh`](./inst
 | DNS Lookup | A `dig`-style query tool: pick a record type and a specific DNS server to ask |
 | DNS Cache | View and flush the resolver cache — what `ipconfig /displaydns`/`/flushdns` do, no GUI |
 | DNS Monitor | Background, continuous resolution checks against chosen DNS servers, with a running log |
-| Hosts File | Edit `C:\Windows\System32\drivers\etc\hosts`, structured or raw, drag entries to reorder them, and restore from automatic backups — no built-in GUI exists for this |
+| Hosts File | Edit `C:\Windows\System32\drivers\etc\hosts`, structured or raw, drag entries to reorder them, and restore from automatic backups, and sync it to WSL distributions — no built-in GUI exists for this |
 | SSH Config | Add, edit and remove `Host` entries in `~/.ssh/config`, structured or raw — no admin rights needed |
 | WSL | Stop distros, shut down or force-restart a hung WSL (and Docker Desktop), and edit `.wslconfig` |
 | Firewall | List Windows Defender Firewall rules, turn them on or off, and create or delete allow/block rules for a port (also from a Ports row) |

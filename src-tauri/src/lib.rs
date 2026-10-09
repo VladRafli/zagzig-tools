@@ -106,6 +106,10 @@ pub fn run() {
             wsl::wsl_terminate_distro,
             wsl::wsl_set_default_distro,
             wsl::wsl_shutdown,
+            wsl::wsl_hosts_status,
+            wsl::wsl_hosts_sync,
+            wsl::wsl_hosts_remove,
+            wsl::wsl_hosts_autosync,
             wsl::wsl_force_restart,
             wsl::restart_docker_desktop,
             wsl::set_wsl_settings,
@@ -2181,37 +2185,282 @@ mod hosts {
     // less error-prone than PowerShell), and hands the result here. ASCII
     // encoding avoids a UTF-8 BOM, which Windows' resolver has historically
     // choked on for this specific file.
-    const SET_HOSTS_WORKER_SCRIPT: &str = r#"
+    // Replaces the hosts file without ever leaving it half written. The old
+    // worker used Set-Content, which empties the file first and then writes,
+    // so any failure in between (or an empty request) left the real file
+    // empty. This one writes the new text next to the file, checks it, swaps
+    // it in, checks the result, and puts the original bytes back if anything
+    // after the swap goes wrong. $target is a PowerShell expression so
+    // the tests can point it at a scratch file.
+    fn set_hosts_worker(target: &str) -> String {
+        format!(
+            r#"
 param(
     [Parameter(Mandatory)] [string]$InputPath,
     [Parameter(Mandatory)] [string]$OutputPath
 )
 $ErrorActionPreference = 'Stop'
-try {
+function Same($a, $b) {{ [Convert]::ToBase64String($a) -ceq [Convert]::ToBase64String($b) }}
+$original = $null
+$touched = $false
+$tmp = $null
+try {{
     $content = Get-Content -Raw -LiteralPath $InputPath
-    $hostsPath = Join-Path $env:WINDIR 'System32\drivers\etc\hosts'
-    Set-Content -LiteralPath $hostsPath -Value $content -NoNewline -Encoding ascii
-    @{ Success = $true } | ConvertTo-Json -Compress | Set-Content -LiteralPath $OutputPath
-} catch {
+    if ([string]::IsNullOrWhiteSpace($content)) {{
+        throw 'Refusing to write an empty hosts file. Nothing was changed.'
+    }}
+    $hostsPath = {target}
+    # UTF-8 without a byte-order mark: keeps accented comments intact, which
+    # ASCII would turn into question marks.
+    $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($content)
+    if (Test-Path -LiteralPath $hostsPath) {{ $original = [System.IO.File]::ReadAllBytes($hostsPath) }}
+
+    $tmp = $hostsPath + '.zagzig-new'
+    [System.IO.File]::WriteAllBytes($tmp, $bytes)
+    if (-not (Same ([System.IO.File]::ReadAllBytes($tmp)) $bytes)) {{
+        throw 'The new hosts file could not be written completely. Nothing was changed.'
+    }}
+
+    $swapped = $false
+    if ($original -ne $null) {{
+        try {{
+            [System.IO.File]::Replace($tmp, $hostsPath, $null)
+            $swapped = $true
+            $touched = $true
+        }} catch {{
+            # Some programs hold the file open in a way that blocks replacing
+            # it; fall back to writing it in place.
+        }}
+    }}
+    if (-not $swapped) {{
+        $touched = $true
+        [System.IO.File]::WriteAllBytes($hostsPath, $bytes)
+    }}
+    if (-not (Same ([System.IO.File]::ReadAllBytes($hostsPath)) $bytes)) {{
+        throw 'The hosts file does not contain the new text after writing.'
+    }}
+    @{{ Success = $true }} | ConvertTo-Json -Compress | Set-Content -LiteralPath $OutputPath
+}} catch {{
     $ex = $_.Exception
-    while ($ex.InnerException) { $ex = $ex.InnerException }
-    @{ Success = $false; Error = $ex.Message } | ConvertTo-Json -Compress | Set-Content -LiteralPath $OutputPath
-}
-"#;
+    while ($ex.InnerException) {{ $ex = $ex.InnerException }}
+    $message = $ex.Message
+    if ($touched -and $original -ne $null) {{
+        # Only act if the file really changed; a write that was refused up
+        # front leaves it exactly as it was.
+        $now = $null
+        try {{ $now = [System.IO.File]::ReadAllBytes($hostsPath) }} catch {{ }}
+        if ($now -eq $null -or -not (Same $now $original)) {{
+            try {{
+                [System.IO.File]::WriteAllBytes($hostsPath, $original)
+                $message += ' The original hosts file was put back.'
+            }} catch {{
+                $message += ' The original could not be put back, restore it from Backups.'
+            }}
+        }}
+    }}
+    @{{ Success = $false; Error = $message }} | ConvertTo-Json -Compress | Set-Content -LiteralPath $OutputPath
+}} finally {{
+    if ($tmp -and (Test-Path -LiteralPath $tmp)) {{ Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }}
+}}
+"#
+        )
+    }
+
+    #[cfg(all(test, windows))]
+    mod worker_tests {
+        use super::*;
+        use std::io::Write;
+        use std::os::windows::fs::OpenOptionsExt;
+
+        struct Scratch(std::path::PathBuf);
+        impl Scratch {
+            fn new(name: &str) -> Self {
+                let dir = std::env::temp_dir().join(format!("zagzig-hosts-{name}-{}", std::process::id()));
+                let _ = std::fs::remove_dir_all(&dir);
+                std::fs::create_dir_all(&dir).unwrap();
+                Scratch(dir)
+            }
+            fn hosts(&self) -> std::path::PathBuf {
+                self.0.join("hosts")
+            }
+            // Runs the real worker against the scratch hosts file and returns
+            // its reply.
+            fn run(&self, content: &str) -> serde_json::Value {
+                let target = format!("'{}'", self.hosts().display());
+                let worker = self.0.join("worker.ps1");
+                let input = self.0.join("input.txt");
+                let output = self.0.join("output.json");
+                std::fs::write(&worker, format!("﻿{}", set_hosts_worker(&target))).unwrap();
+                std::fs::write(&input, format!("﻿{content}")).unwrap();
+                let status = std::process::Command::new("powershell")
+                    .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+                    .arg(&worker)
+                    .arg("-InputPath")
+                    .arg(&input)
+                    .arg("-OutputPath")
+                    .arg(&output)
+                    .output()
+                    .unwrap();
+                let reply = std::fs::read_to_string(&output)
+                    .unwrap_or_else(|_| panic!("no reply: {}", String::from_utf8_lossy(&status.stderr)));
+                serde_json::from_str(reply.trim_start_matches('﻿').trim()).unwrap()
+            }
+        }
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        #[test]
+        fn replaces_the_file_and_keeps_accents() {
+            let s = Scratch::new("ok");
+            std::fs::write(s.hosts(), "127.0.0.1 old
+").unwrap();
+            let reply = s.run("127.0.0.1 localhost # café
+10.0.0.1 db
+");
+            assert_eq!(reply["Success"], true, "{reply}");
+            assert_eq!(std::fs::read_to_string(s.hosts()).unwrap(), "127.0.0.1 localhost # café
+10.0.0.1 db
+");
+            assert!(!s.0.join("hosts.zagzig-new").exists(), "the temp file is cleaned up");
+        }
+
+        #[test]
+        fn creates_the_file_when_it_is_missing() {
+            let s = Scratch::new("new");
+            let reply = s.run("127.0.0.1 localhost
+");
+            assert_eq!(reply["Success"], true, "{reply}");
+            assert_eq!(std::fs::read_to_string(s.hosts()).unwrap(), "127.0.0.1 localhost
+");
+        }
+
+        #[test]
+        fn an_empty_request_never_empties_the_file() {
+            let s = Scratch::new("empty");
+            std::fs::write(s.hosts(), "127.0.0.1 keep
+").unwrap();
+            for blank in ["", "   
+"] {
+                let reply = s.run(blank);
+                assert_eq!(reply["Success"], false, "{reply}");
+                assert!(reply["Error"].as_str().unwrap().contains("empty hosts file"));
+                assert_eq!(std::fs::read_to_string(s.hosts()).unwrap(), "127.0.0.1 keep
+");
+            }
+        }
+
+        #[test]
+        fn a_refused_write_leaves_the_file_as_it_was() {
+            let s = Scratch::new("locked");
+            std::fs::write(s.hosts(), "127.0.0.1 keep
+").unwrap();
+            // Held open with no sharing at all: neither the swap nor an in
+            // place write can get in.
+            let mut lock = std::fs::OpenOptions::new().read(true).write(true).share_mode(0).open(s.hosts()).unwrap();
+            let reply = s.run("10.9.9.9 new
+");
+            assert_eq!(reply["Success"], false, "{reply}");
+            lock.flush().unwrap();
+            drop(lock);
+            assert_eq!(std::fs::read_to_string(s.hosts()).unwrap(), "127.0.0.1 keep
+");
+            assert!(!s.0.join("hosts.zagzig-new").exists());
+        }
+
+        #[test]
+        fn a_read_only_file_is_left_untouched_and_the_message_is_honest() {
+            let s = Scratch::new("readonly");
+            std::fs::write(s.hosts(), "127.0.0.1 keep
+").unwrap();
+            let mut perms = std::fs::metadata(s.hosts()).unwrap().permissions();
+            perms.set_readonly(true);
+            std::fs::set_permissions(s.hosts(), perms.clone()).unwrap();
+            let reply = s.run("10.9.9.9 new
+");
+            perms.set_readonly(false);
+            std::fs::set_permissions(s.hosts(), perms).unwrap();
+            assert_eq!(reply["Success"], false, "{reply}");
+            assert!(!reply["Error"].as_str().unwrap().contains("could not be put back"), "{reply}");
+            assert_eq!(std::fs::read_to_string(s.hosts()).unwrap(), "127.0.0.1 keep
+");
+        }
+
+        #[test]
+        fn the_worker_parses() {
+            assert_eq!(crate::powershell_syntax_errors(&set_hosts_worker(r"'C:\x\hosts'")), Vec::<String>::new());
+        }
+    }
 
     // Every write goes through here, so every write is preceded by a backup
     // of what's about to be replaced (see the backup section below). A
     // backup that can't be made doesn't block the edit — the user asked for
     // it, and the file is theirs — but it's the common case that it works.
     async fn write_hosts_raw(app: &tauri::AppHandle, reason: &str, content: String) -> Result<(), String> {
+        if content.trim().is_empty() {
+            return Err("Refusing to write an empty hosts file. Nothing was changed.".to_string());
+        }
         let _ = backup_current(app, reason).await;
-        let trimmed = run_elevated(SET_HOSTS_WORKER_SCRIPT, &content).await?;
-        let parsed: ElevatedResult = serde_json::from_str(&trimmed)
-            .map_err(|err| format!("failed to parse powershell output: {err}"))?;
-        if parsed.success {
-            Ok(())
-        } else {
-            Err(parsed.error.unwrap_or_else(|| "Unknown error.".to_string()))
+        let before = read_hosts_raw().ok();
+        let result = run_elevated(&set_hosts_worker(r"Join-Path $env:WINDIR 'System32\drivers\etc\hosts'"), &content).await;
+        let outcome = result.and_then(|trimmed| {
+            let parsed: ElevatedResult = serde_json::from_str(&trimmed)
+                .map_err(|err| format!("failed to parse powershell output: {err}"))?;
+            if parsed.success {
+                Ok(())
+            } else {
+                Err(parsed.error.unwrap_or_else(|| "Unknown error.".to_string()))
+            }
+        });
+        let after = read_hosts_raw().ok();
+        log_hosts_write(app, reason, before.as_deref(), after.as_deref(), &outcome);
+        // Whatever went wrong, make sure the real file isn't left worse than
+        // it was. The worker rolls back on its own; this catches the case
+        // where it never got to (PowerShell itself failing) and says so.
+        if let Err(err) = &outcome {
+            if let (Some(before), Some(now)) = (&before, &after) {
+                if now != before && now.trim().is_empty() {
+                    return Err(format!(
+                        "{err} The hosts file is now empty. Restore it from Backups (Compare / restore)."
+                    ));
+                }
+            }
+        }
+        outcome
+    }
+
+    // A short trail of every write (when, why, sizes before and after, the
+    // error if any) in the app's data folder. If a write ever damages the
+    // file again, this says what happened. It holds no file content.
+    fn log_hosts_write(
+        app: &tauri::AppHandle,
+        reason: &str,
+        before: Option<&str>,
+        after: Option<&str>,
+        outcome: &Result<(), String>,
+    ) {
+        use std::io::Write;
+        let Ok(dir) = backups_dir(app) else { return };
+        let Some(parent) = dir.parent() else { return };
+        let path = parent.join("hosts-write.log");
+        if std::fs::metadata(&path).map(|m| m.len() > 100_000).unwrap_or(false) {
+            let _ = std::fs::remove_file(&path);
+        }
+        let size = |t: Option<&str>| t.map(|t| t.len().to_string()).unwrap_or_else(|| "unreadable".to_string());
+        let line = format!(
+            "{} reason={reason} before={} after={} result={}\n",
+            now_secs(),
+            size(before),
+            size(after),
+            match outcome {
+                Ok(()) => "ok".to_string(),
+                Err(err) => format!("error: {}", err.replace('\n', " ")),
+            }
+        );
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = file.write_all(line.as_bytes());
         }
     }
 
@@ -3410,6 +3659,607 @@ mod wsl {
     pub async fn wsl_set_default_distro(name: String) -> Result<(), String> {
         known_distro(&name).await?;
         run_checked(&["--set-default", &name]).await
+    }
+
+    // ---- Copying the Windows hosts file into a distribution ----------------
+    //
+    // WSL rebuilds /etc/hosts every time a distribution starts (unless
+    // generateHosts is off in /etc/wsl.conf), so a one-off edit disappears at
+    // the next start. "Sync now" writes a marked block into /etc/hosts, and
+    // "keep synced" installs a small script that /etc/wsl.conf runs at every
+    // start to put the block back from the live Windows file.
+
+    const SYNC_BEGIN: &str = "# BEGIN zagzig-tools hosts (managed, do not edit)";
+    const SYNC_END: &str = "# END zagzig-tools hosts";
+    const BOOT_SCRIPT_PATH: &str = "/usr/local/sbin/zagzig-hosts-sync";
+    const MAX_BLOCK_BYTES: usize = 20_000;
+
+    // An IP address, optionally with an IPv6 zone (`fe80::1%eth0`).
+    fn safe_address(token: &str) -> bool {
+        let (ip, zone) = match token.split_once('%') {
+            Some((ip, zone)) => (ip, Some(zone)),
+            None => (token, None),
+        };
+        ip.parse::<std::net::IpAddr>().is_ok()
+            && zone.map_or(true, |z| !z.is_empty() && z.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+    }
+
+    fn safe_hostname(name: &str) -> bool {
+        !name.is_empty()
+            && name.len() <= 253
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '*'))
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct Block {
+        text: String,
+        entries: usize,
+        skipped: usize,
+    }
+
+    // The active Windows entries as a block. `localhost` lines are left out
+    // (the distribution has its own), and so is anything whose address or
+    // names contain characters /etc/hosts wouldn't accept.
+    fn build_block(entries: &[(String, Vec<String>)]) -> Result<Block, String> {
+        let mut lines = Vec::new();
+        let mut skipped = 0;
+        for (ip, names) in entries {
+            if names.is_empty() || names.iter().all(|n| n.eq_ignore_ascii_case("localhost")) {
+                continue;
+            }
+            if !safe_address(ip) || !names.iter().all(|n| safe_hostname(n)) {
+                skipped += 1;
+                continue;
+            }
+            lines.push(format!("{ip} {}", names.join(" ")));
+        }
+        let mut text = format!("{SYNC_BEGIN}\n");
+        for line in &lines {
+            text.push_str(line);
+            text.push('\n');
+        }
+        text.push_str(SYNC_END);
+        text.push('\n');
+        if text.len() > MAX_BLOCK_BYTES {
+            return Err("There are too many hosts entries to copy in one go.".to_string());
+        }
+        Ok(Block { text, entries: lines.len(), skipped })
+    }
+
+    // Removes our block. An unterminated one (BEGIN with no END) only loses
+    // its BEGIN line, so a damaged file never costs unrelated lines.
+    fn strip_block(existing: &str) -> String {
+        let lines: Vec<&str> = existing.lines().collect();
+        let mut out: Vec<&str> = Vec::new();
+        let mut i = 0;
+        while i < lines.len() {
+            if lines[i].trim_end() == SYNC_BEGIN {
+                if let Some(offset) = lines[i + 1..].iter().position(|l| l.trim_end() == SYNC_END) {
+                    i += offset + 2;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+            out.push(lines[i]);
+            i += 1;
+        }
+        let mut text = out.join("\n");
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text
+    }
+
+    fn merge_block(existing: &str, block: &str) -> String {
+        let mut text = strip_block(existing);
+        while text.ends_with("\n\n") {
+            text.pop();
+        }
+        text.push_str(block);
+        text
+    }
+
+    fn block_entry_count(existing: &str) -> Option<usize> {
+        let lines: Vec<&str> = existing.lines().collect();
+        let start = lines.iter().position(|l| l.trim_end() == SYNC_BEGIN)?;
+        let end = lines[start + 1..].iter().position(|l| l.trim_end() == SYNC_END)?;
+        Some(lines[start + 1..start + 1 + end].iter().filter(|l| !l.trim().is_empty()).count())
+    }
+
+    // /etc/wsl.conf: one `command` under [boot] is all WSL runs, so ours is
+    // only added when that slot is free.
+    fn boot_command_of(conf: &str) -> Option<String> {
+        let mut in_boot = false;
+        for line in conf.lines() {
+            if let Some(section) = section_name(line) {
+                in_boot = section == "boot";
+            } else if in_boot {
+                if let Some((key, value)) = key_of(line) {
+                    if key == "command" {
+                        return Some(value.trim().trim_matches('"').to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn set_boot_command(conf: &str) -> Result<String, String> {
+        match boot_command_of(conf) {
+            Some(existing) if existing == BOOT_SCRIPT_PATH => return Ok(conf.to_string()),
+            Some(existing) => {
+                return Err(format!(
+                    "This distribution already runs another boot command ({existing}), and WSL allows only one. Add {BOOT_SCRIPT_PATH} to it yourself, or remove the other command first."
+                ))
+            }
+            None => {}
+        }
+        let line = format!("command = {BOOT_SCRIPT_PATH}");
+        let mut lines: Vec<String> = conf.lines().map(str::to_string).collect();
+        match lines.iter().position(|l| section_name(l).as_deref() == Some("boot")) {
+            Some(i) => lines.insert(i + 1, line),
+            None => {
+                if lines.last().is_some_and(|l| !l.trim().is_empty()) {
+                    lines.push(String::new());
+                }
+                lines.push("[boot]".to_string());
+                lines.push(line);
+            }
+        }
+        Ok(format!("{}\n", lines.join("\n")))
+    }
+
+    fn remove_boot_command(conf: &str) -> String {
+        let mut in_boot = false;
+        let kept: Vec<&str> = conf
+            .lines()
+            .filter(|line| {
+                if let Some(section) = section_name(line) {
+                    in_boot = section == "boot";
+                    return true;
+                }
+                !(in_boot
+                    && key_of(line)
+                        .is_some_and(|(k, v)| k == "command" && v.trim().trim_matches('"') == BOOT_SCRIPT_PATH))
+            })
+            .collect();
+        // An emptied [boot] section goes too, with the blank line before it.
+        let mut lines: Vec<&str> = kept;
+        if let Some(i) = lines.iter().position(|l| section_name(l).as_deref() == Some("boot")) {
+            let body = lines[i + 1..].iter().take_while(|l| section_name(l).is_none()).count();
+            if lines[i + 1..i + 1 + body].iter().all(|l| l.trim().is_empty()) {
+                lines.drain(i..i + 1 + body);
+                if i > 0 && lines.get(i - 1).is_some_and(|l| l.trim().is_empty()) {
+                    lines.remove(i - 1);
+                }
+            }
+        }
+        let text = lines.join("\n");
+        if text.trim().is_empty() {
+            String::new()
+        } else {
+            format!("{text}\n")
+        }
+    }
+
+    fn generate_hosts_enabled(conf: &str) -> bool {
+        let mut in_network = false;
+        let mut enabled = true;
+        for line in conf.lines() {
+            if let Some(section) = section_name(line) {
+                in_network = section == "network";
+            } else if in_network {
+                if let Some((key, value)) = key_of(line) {
+                    if key == "generateHosts" {
+                        enabled = !value.trim().trim_matches('"').eq_ignore_ascii_case("false");
+                    }
+                }
+            }
+        }
+        enabled
+    }
+
+    // `C:\Windows\System32\drivers\etc\hosts` as WSL sees it.
+    fn posix_path_of(windows: &str) -> Option<String> {
+        let mut chars = windows.chars();
+        let drive = chars.next().filter(|c| c.is_ascii_alphabetic())?;
+        if chars.next() != Some(':') {
+            return None;
+        }
+        Some(format!("/mnt/{}{}", drive.to_ascii_lowercase(), windows[2..].replace('\\', "/")))
+    }
+
+    // Runs at every start of the distribution and rebuilds the block from the
+    // live Windows file, with the same rules as `build_block`. It never
+    // fails the boot: any problem just leaves /etc/hosts as WSL made it.
+    fn boot_script(source: &str) -> String {
+        format!(
+            r#"#!/bin/sh
+# Installed by zagzig-tools. Copies the active entries of the Windows hosts
+# file into /etc/hosts. Remove it from the app (Hosts File > WSL) or delete
+# the "command" line under [boot] in /etc/wsl.conf.
+SRC='{source}'
+HOSTS=/etc/hosts
+[ -r "$SRC" ] || exit 0
+tmp=$(mktemp) || exit 0
+awk -v b='{SYNC_BEGIN}' -v e='{SYNC_END}' '
+  $0 == b {{ skip = 1; next }}
+  skip && $0 == e {{ skip = 0; next }}
+  !skip {{ print }}' "$HOSTS" > "$tmp"
+{{
+  printf '%s\n' '{SYNC_BEGIN}'
+  awk '
+    {{ sub(/\r$/, ""); sub(/#.*/, "") }}
+    NF < 2 {{ next }}
+    $1 !~ /^[0-9A-Fa-f:.]+(%[A-Za-z0-9_]+)?$/ {{ next }}
+    {{
+      all = 1; ok = 1
+      for (i = 2; i <= NF; i++) {{
+        if (tolower($i) != "localhost") all = 0
+        if ($i !~ /^[A-Za-z0-9._*-]+$/) ok = 0
+      }}
+      if (all || !ok) next
+      line = $1
+      for (i = 2; i <= NF; i++) line = line " " $i
+      print line
+    }}' "$SRC"
+  printf '%s\n' '{SYNC_END}'
+}} >> "$tmp"
+[ -s "$tmp" ] && cat "$tmp" > "$HOSTS"
+rm -f "$tmp"
+exit 0
+"#
+        )
+    }
+
+    // base64 for passing file contents to the distribution as one plain
+    // argument (no quoting problems, whatever the text holds).
+    fn base64(bytes: &[u8]) -> String {
+        const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+        for chunk in bytes.chunks(3) {
+            let n = (chunk[0] as u32) << 16
+                | (*chunk.get(1).unwrap_or(&0) as u32) << 8
+                | *chunk.get(2).unwrap_or(&0) as u32;
+            out.push(TABLE[(n >> 18) as usize & 63] as char);
+            out.push(TABLE[(n >> 12) as usize & 63] as char);
+            out.push(if chunk.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
+            out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
+        }
+        out
+    }
+
+    const DISTRO_TIMEOUT: Duration = Duration::from_secs(60);
+
+    // Runs `script` as root inside the distribution without a shell in
+    // between (`--exec`), so the arguments arrive exactly as given. The
+    // scripts below use no double quotes: they have to survive wsl.exe's
+    // command-line parsing.
+    async fn distro_sh(name: &str, script: &str, args: &[&str]) -> Result<WslOutput, String> {
+        let mut full = vec!["-d", name, "-u", "root", "--exec", "sh", "-c", script, "sh"];
+        full.extend_from_slice(args);
+        run_wsl_with(&full, DISTRO_TIMEOUT).await
+    }
+
+    async fn distro_read(name: &str, path: &str) -> Result<Option<String>, String> {
+        let out = distro_sh(name, "[ -e $1 ] || exit 3; cat $1", &[path]).await?;
+        if out.success {
+            Ok(Some(out.stdout))
+        } else if out.stderr.trim().is_empty() {
+            // The file just isn't there (exit 3, nothing on stderr).
+            Ok(None)
+        } else {
+            Err(failure_message(&out))
+        }
+    }
+
+    // Writes `content` to `path`: into a temporary file first, and only a
+    // complete one is copied over the target. `keep_backup` leaves a
+    // one-time copy of the original next to it.
+    async fn distro_write(name: &str, path: &str, content: &str, mode: &str, keep_backup: bool) -> Result<(), String> {
+        const SCRIPT: &str = "set -e; mkdir -p $(dirname $2); t=$2.zagzig-new; printf %s $1 | base64 -d > $t; \
+            [ -s $t ] || { rm -f $t; echo the new content came through empty >&2; exit 1; }; \
+            if [ $4 = 1 ] && [ -e $2 ] && [ ! -e $2.zagzig-backup ]; then cp $2 $2.zagzig-backup; fi; \
+            cat $t > $2 || { rm -f $t; exit 1; }; if [ $3 != - ]; then chmod $3 $2; fi; rm -f $t";
+        let encoded = base64(content.as_bytes());
+        let out = distro_sh(name, SCRIPT, &[&encoded, path, mode, if keep_backup { "1" } else { "0" }]).await?;
+        if out.success {
+            Ok(())
+        } else {
+            Err(failure_message(&out))
+        }
+    }
+
+    async fn windows_entries() -> Result<Vec<(String, Vec<String>)>, String> {
+        Ok(super::hosts::get_hosts_entries()
+            .await?
+            .entries
+            .into_iter()
+            .filter(|e| e.enabled)
+            .map(|e| (e.ip, e.hostnames))
+            .collect())
+    }
+
+    #[derive(Debug, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct WslHostsStatus {
+        /// Entries in the synced block, or None when there is no block.
+        pub synced_entries: Option<usize>,
+        /// False when /etc/wsl.conf turns off WSL's own /etc/hosts rebuild,
+        /// which is what makes a synced block survive a restart.
+        pub generate_hosts: bool,
+        pub auto_sync: bool,
+        /// Another program's boot command, which stops "keep synced".
+        pub boot_conflict: Option<String>,
+    }
+
+    #[tauri::command]
+    pub async fn wsl_hosts_status(name: String) -> Result<WslHostsStatus, String> {
+        known_distro(&name).await?;
+        let hosts = distro_read(&name, "/etc/hosts").await?.unwrap_or_default();
+        let conf = distro_read(&name, "/etc/wsl.conf").await?.unwrap_or_default();
+        let script = distro_read(&name, BOOT_SCRIPT_PATH).await?.is_some();
+        let command = boot_command_of(&conf);
+        Ok(WslHostsStatus {
+            synced_entries: block_entry_count(&hosts),
+            generate_hosts: generate_hosts_enabled(&conf),
+            auto_sync: script && command.as_deref() == Some(BOOT_SCRIPT_PATH),
+            boot_conflict: command.filter(|c| c != BOOT_SCRIPT_PATH),
+        })
+    }
+
+    #[derive(Debug, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct WslHostsSyncResult {
+        pub entries: usize,
+        pub skipped: usize,
+    }
+
+    #[tauri::command]
+    pub async fn wsl_hosts_sync(name: String) -> Result<WslHostsSyncResult, String> {
+        known_distro(&name).await?;
+        let block = build_block(&windows_entries().await?)?;
+        let existing = distro_read(&name, "/etc/hosts").await?.unwrap_or_default();
+        distro_write(&name, "/etc/hosts", &merge_block(&existing, &block.text), "-", true).await?;
+        Ok(WslHostsSyncResult { entries: block.entries, skipped: block.skipped })
+    }
+
+    #[tauri::command]
+    pub async fn wsl_hosts_remove(name: String) -> Result<(), String> {
+        known_distro(&name).await?;
+        let existing = distro_read(&name, "/etc/hosts").await?.unwrap_or_default();
+        if block_entry_count(&existing).is_none() && !existing.contains(SYNC_BEGIN) {
+            return Ok(());
+        }
+        let stripped = strip_block(&existing);
+        if stripped.trim().is_empty() {
+            return Err("Removing the block would leave /etc/hosts empty, so nothing was changed.".to_string());
+        }
+        distro_write(&name, "/etc/hosts", &stripped, "-", true).await
+    }
+
+    #[tauri::command]
+    pub async fn wsl_hosts_autosync(name: String, enabled: bool) -> Result<(), String> {
+        known_distro(&name).await?;
+        let conf = distro_read(&name, "/etc/wsl.conf").await?.unwrap_or_default();
+        if enabled {
+            let source = std::env::var("WINDIR")
+                .ok()
+                .and_then(|w| posix_path_of(&format!("{w}\\System32\\drivers\\etc\\hosts")))
+                .ok_or_else(|| "Couldn't work out where the Windows hosts file is for WSL.".to_string())?;
+            let new_conf = set_boot_command(&conf)?;
+            distro_write(&name, BOOT_SCRIPT_PATH, &boot_script(&source), "755", false).await?;
+            if new_conf != conf {
+                distro_write(&name, "/etc/wsl.conf", &new_conf, "-", true).await?;
+            }
+            // Apply it straight away too, so the user sees the result.
+            wsl_hosts_sync(name).await.map(|_| ())
+        } else {
+            if boot_command_of(&conf).as_deref() == Some(BOOT_SCRIPT_PATH) {
+                let new_conf = remove_boot_command(&conf);
+                // An emptied file is replaced by a comment: an empty write is refused.
+                let new_conf = if new_conf.is_empty() { "# /etc/wsl.conf\n".to_string() } else { new_conf };
+                distro_write(&name, "/etc/wsl.conf", &new_conf, "-", true).await?;
+            }
+            let out = distro_sh(&name, "rm -f $1", &[BOOT_SCRIPT_PATH]).await?;
+            if out.success {
+                Ok(())
+            } else {
+                Err(failure_message(&out))
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod hosts_sync_tests {
+        use super::*;
+
+        fn e(ip: &str, names: &[&str]) -> (String, Vec<String>) {
+            (ip.to_string(), names.iter().map(|n| n.to_string()).collect())
+        }
+
+        #[test]
+        fn block_skips_localhost_and_unsafe_lines() {
+            let block = build_block(&[
+                e("127.0.0.1", &["localhost"]),
+                e("::1", &["localhost", "LOCALHOST"]),
+                e("127.0.0.1", &["myapp.local", "api.local"]),
+                e("10.0.0.5", &["db.corp"]),
+                e("fe80::1%eth0", &["router"]),
+                e("10.0.0.6", &["bad name; rm"]),
+                e("not-an-ip", &["x"]),
+                e("10.0.0.7", &[]),
+            ])
+            .unwrap();
+            assert_eq!(block.entries, 3);
+            assert_eq!(block.skipped, 2);
+            assert_eq!(
+                block.text,
+                format!("{SYNC_BEGIN}\n127.0.0.1 myapp.local api.local\n10.0.0.5 db.corp\nfe80::1%eth0 router\n{SYNC_END}\n")
+            );
+        }
+
+        #[test]
+        fn merge_replaces_instead_of_stacking() {
+            let base = "127.0.0.1 localhost\n127.0.1.1 box\n";
+            let one = build_block(&[e("10.0.0.5", &["a.local"])]).unwrap().text;
+            let two = build_block(&[e("10.0.0.6", &["b.local"])]).unwrap().text;
+            let first = merge_block(base, &one);
+            assert!(first.starts_with(base) && first.contains("a.local"));
+            let second = merge_block(&first, &two);
+            assert!(second.contains("b.local") && !second.contains("a.local"));
+            assert_eq!(second.matches(SYNC_BEGIN).count(), 1);
+            assert_eq!(merge_block(&second, &two), second, "syncing twice changes nothing");
+            assert_eq!(strip_block(&second), base, "removing the block restores the original");
+            assert_eq!(block_entry_count(&second), Some(1));
+            assert_eq!(block_entry_count(base), None);
+        }
+
+        #[test]
+        fn a_damaged_block_never_costs_other_lines() {
+            let broken = format!("1.1.1.1 keep\n{SYNC_BEGIN}\n2.2.2.2 also.keep\n");
+            assert_eq!(strip_block(&broken), "1.1.1.1 keep\n2.2.2.2 also.keep\n");
+            assert_eq!(strip_block("no trailing newline"), "no trailing newline\n");
+        }
+
+        #[test]
+        fn too_many_entries_are_refused() {
+            let many: Vec<_> = (0..2000).map(|i| e("10.0.0.1", &[&format!("host-number-{i}.example.local")])).collect();
+            assert!(build_block(&many).is_err());
+        }
+
+        #[test]
+        fn boot_command_is_added_removed_and_never_clobbers() {
+            let none = "[network]\ngenerateHosts = false\n";
+            let added = set_boot_command(none).unwrap();
+            assert_eq!(boot_command_of(&added).as_deref(), Some(BOOT_SCRIPT_PATH));
+            assert!(added.contains("[network]") && added.contains("generateHosts = false"));
+            assert_eq!(set_boot_command(&added).unwrap(), added, "adding twice changes nothing");
+            assert_eq!(remove_boot_command(&added), none);
+
+            let with_section = "[boot]\nsystemd = true\n\n[user]\ndefault = me\n";
+            let added = set_boot_command(with_section).unwrap();
+            assert_eq!(boot_command_of(&added).as_deref(), Some(BOOT_SCRIPT_PATH));
+            assert!(added.contains("systemd = true") && added.contains("default = me"));
+            assert_eq!(remove_boot_command(&added), with_section);
+
+            let other = "[boot]\ncommand = service docker start\n";
+            let err = set_boot_command(other).unwrap_err();
+            assert!(err.contains("service docker start"));
+            assert_eq!(remove_boot_command(other), other, "someone else's command is left alone");
+
+            assert_eq!(set_boot_command("").unwrap(), format!("[boot]\ncommand = {BOOT_SCRIPT_PATH}\n"));
+            assert_eq!(remove_boot_command(&set_boot_command("").unwrap()), "");
+        }
+
+        #[test]
+        fn reads_generate_hosts() {
+            assert!(generate_hosts_enabled(""));
+            assert!(generate_hosts_enabled("[network]\nhostname = x\n"));
+            assert!(!generate_hosts_enabled("[network]\ngenerateHosts = false\n"));
+            assert!(!generate_hosts_enabled("[network]\ngenerateHosts=False\n"));
+            assert!(generate_hosts_enabled("[boot]\ngenerateHosts = false\n"), "only the [network] section counts");
+        }
+
+        #[test]
+        fn converts_windows_paths() {
+            assert_eq!(
+                posix_path_of(r"C:\Windows\System32\drivers\etc\hosts").as_deref(),
+                Some("/mnt/c/Windows/System32/drivers/etc/hosts")
+            );
+            assert_eq!(posix_path_of(r"D:\Win\hosts").as_deref(), Some("/mnt/d/Win/hosts"));
+            assert_eq!(posix_path_of("relative"), None);
+        }
+
+        // Runs against a real distribution (the default one) and puts
+        // /etc/hosts back exactly as it was. Run by hand:
+        // cargo test live_distro -- --ignored --nocapture
+        #[test]
+        #[ignore = "changes /etc/hosts of the default WSL distribution, then restores it"]
+        fn live_distro() {
+            tauri::async_runtime::block_on(async {
+                let listing = run_wsl(&["--list", "--verbose"]).await.unwrap();
+                let distros = parse_distros(&listing.stdout, &[]);
+                let name = distros.iter().find(|d| d.is_default).expect("a default distribution").name.clone();
+                println!("using {name}");
+
+                // 1. The file writer: unicode, mode, one-time backup, refusing empty content.
+                let dir = "/tmp/zagzig-live";
+                distro_sh(&name, "rm -rf $1; mkdir -p $1", &[dir]).await.unwrap();
+                let file = format!("{dir}/sub/test.txt");
+                distro_write(&name, &file, "caf\u{e9} one\n", "640", true).await.unwrap();
+                distro_write(&name, &file, "caf\u{e9} two\n", "640", true).await.unwrap();
+                assert_eq!(distro_read(&name, &file).await.unwrap().unwrap(), "caf\u{e9} two\n");
+                assert_eq!(distro_read(&name, &format!("{file}.zagzig-backup")).await.unwrap().unwrap(), "caf\u{e9} one\n");
+                let mode = distro_sh(&name, "stat -c %a $1", &[&file]).await.unwrap();
+                assert_eq!(mode.stdout.trim(), "640");
+                assert!(distro_write(&name, &file, "", "-", false).await.is_err(), "empty content is refused");
+                assert_eq!(distro_read(&name, &file).await.unwrap().unwrap(), "caf\u{e9} two\n", "and the file is untouched");
+                assert_eq!(distro_read(&name, &format!("{dir}/nothing")).await.unwrap(), None);
+
+                // 2. The boot script gives the same block as build_block.
+                let windows = "# comment\r\n127.0.0.1 localhost\r\n::1\tlocalhost  LOCALHOST\r\n127.0.0.1\tmyapp.local   api.local # note\r\n10.0.0.5 db.corp\r\nfe80::1%eth0 router\r\n10.0.0.6 bad;name\r\nnot-an-ip x\r\n10.0.0.7\r\n  10.0.0.8   spaced.host  \r\n";
+                distro_write(&name, &format!("{dir}/win-hosts"), windows, "-", false).await.unwrap();
+                distro_write(&name, &format!("{dir}/etc-hosts"), "127.0.0.1 localhost\n127.0.1.1 box\n", "-", false).await.unwrap();
+                let script = boot_script(&format!("{dir}/win-hosts")).replace("HOSTS=/etc/hosts", &format!("HOSTS={dir}/etc-hosts"));
+                distro_write(&name, &format!("{dir}/boot.sh"), &script, "755", false).await.unwrap();
+                let ran = distro_sh(&name, "sh $1", &[&format!("{dir}/boot.sh")]).await.unwrap();
+                assert!(ran.success, "{}", failure_message(&ran));
+                let by_script = distro_read(&name, &format!("{dir}/etc-hosts")).await.unwrap().unwrap();
+                let expected = build_block(&[
+                    e("127.0.0.1", &["myapp.local", "api.local"]),
+                    e("10.0.0.5", &["db.corp"]),
+                    e("fe80::1%eth0", &["router"]),
+                    e("10.0.0.8", &["spaced.host"]),
+                ])
+                .unwrap();
+                assert_eq!(by_script, merge_block("127.0.0.1 localhost\n127.0.1.1 box\n", &expected.text));
+                // Running it again changes nothing.
+                distro_sh(&name, "sh $1", &[&format!("{dir}/boot.sh")]).await.unwrap();
+                assert_eq!(distro_read(&name, &format!("{dir}/etc-hosts")).await.unwrap().unwrap(), by_script);
+                // A missing Windows file leaves /etc/hosts alone.
+                distro_sh(&name, "rm $1", &[&format!("{dir}/win-hosts")]).await.unwrap();
+                distro_sh(&name, "sh $1", &[&format!("{dir}/boot.sh")]).await.unwrap();
+                assert_eq!(distro_read(&name, &format!("{dir}/etc-hosts")).await.unwrap().unwrap(), by_script);
+
+                // 3. The real thing on /etc/hosts, then put back.
+                let original = distro_read(&name, "/etc/hosts").await.unwrap().unwrap();
+                let had_backup = distro_read(&name, "/etc/hosts.zagzig-backup").await.unwrap().is_some();
+                let outcome = async {
+                    let synced = wsl_hosts_sync(name.clone()).await?;
+                    println!("synced {} entries ({} skipped)", synced.entries, synced.skipped);
+                    let status = wsl_hosts_status(name.clone()).await?;
+                    assert_eq!(status.synced_entries, Some(synced.entries));
+                    let after = distro_read(&name, "/etc/hosts").await?.unwrap();
+                    assert!(after.starts_with(original.trim_end_matches('\n')), "the original lines are untouched");
+                    wsl_hosts_sync(name.clone()).await?;
+                    assert_eq!(distro_read(&name, "/etc/hosts").await?.unwrap(), after, "syncing twice changes nothing");
+                    wsl_hosts_remove(name.clone()).await?;
+                    assert_eq!(distro_read(&name, "/etc/hosts").await?.unwrap(), original, "removing restores the file");
+                    assert_eq!(wsl_hosts_status(name.clone()).await?.synced_entries, None);
+                    Ok::<(), String>(())
+                }
+                .await;
+                // Whatever happened, leave /etc/hosts as found.
+                if distro_read(&name, "/etc/hosts").await.unwrap().unwrap() != original {
+                    distro_write(&name, "/etc/hosts", &original, "-", false).await.unwrap();
+                }
+                if !had_backup {
+                    distro_sh(&name, "rm -f /etc/hosts.zagzig-backup", &[]).await.unwrap();
+                }
+                distro_sh(&name, "rm -rf $1", &[dir]).await.unwrap();
+                outcome.unwrap();
+            });
+        }
+
+        #[test]
+        fn base64_matches_the_standard_vectors() {
+            for (input, expected) in [("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"), ("foob", "Zm9vYg=="), ("fooba", "Zm9vYmE="), ("foobar", "Zm9vYmFy")] {
+                assert_eq!(base64(input.as_bytes()), expected);
+            }
+            assert_eq!(base64("é\n".as_bytes()), "w6kK");
+        }
     }
 
     #[tauri::command]
