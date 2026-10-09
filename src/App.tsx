@@ -54,6 +54,7 @@ import { PortScannerPage } from "@/features/port-scanner/port-scanner-page";
 import { StartupPage } from "@/features/startup/startup-page";
 import { TlsInspectorPage } from "@/features/tls-inspector/tls-inspector-page";
 import { DiagnosticsPage } from "@/features/diagnostics/diagnostics-page";
+import { SnapshotsPage } from "@/features/snapshots/snapshots-page";
 
 // The manual pulls in a Markdown renderer, so it loads only when opened.
 const ManualPage = lazy(() =>
@@ -234,6 +235,7 @@ function App() {
             {active === "startup" && <StartupPage />}
             {active === "tls-inspector" && <TlsInspectorPage />}
             {active === "diagnostics" && <DiagnosticsPage />}
+            {active === "snapshots" && <SnapshotsPage />}
             {active === "network-routes" && <RoutingPage />}
             {active === "dns-servers" && <DnsPage />}
             {active === "dns-cache" && <DnsCachePage />}

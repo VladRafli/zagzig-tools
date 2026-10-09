@@ -585,6 +585,26 @@ administrator rights needed, and it takes a few seconds.
 The report never contains saved Wi-Fi passwords or environment variable values. Still read it before
 sharing, since hostnames, folder names and process names can identify you or your organisation.
 
+### Snapshots
+
+*System → Snapshots*
+
+Saves the network setup so you can compare it later, for "it worked yesterday". Take one while things
+work, then compare it with **Now** when something breaks. No administrator rights needed.
+
+- **Take snapshot:** give it a name (optional, like "Before the VPN change"). It records the network
+  adapters (status, addresses, gateway, DNS servers, DHCP, MAC, speed, MTU), the routes, NRPT rules,
+  the WinHTTP proxy and the active hosts entries. Traffic counters are left out, since they change on
+  their own. The newest 50 are kept on this PC.
+- **Compare:** pick a **Before** snapshot and an **After** one, either another snapshot or **Now**
+  (read on the spot). Each section lists what was added (+), removed (−) and changed (~), with the
+  old value crossed out next to the new one. A section that couldn't be read is named rather than
+  reported as changed.
+- **Saved snapshots:** rename or delete them from the list.
+
+Snapshots contain addresses and host names. They stay in the app's data folder and are never
+uploaded.
+
 ### Code Signing
 
 *Dev Tools → Code Signing*

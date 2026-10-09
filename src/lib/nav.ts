@@ -4,6 +4,7 @@ import {
   FileBadge,
   FileCog,
   FileSignature,
+  History,
   LayoutDashboard,
   Network,
   ArrowRightLeft,
@@ -73,6 +74,7 @@ export type NavId =
   | "startup"
   | "tls-inspector"
   | "diagnostics"
+  | "snapshots"
   | "proxy-settings"
   | "code-signing"
   | "certificate-store";
@@ -119,6 +121,7 @@ export const navGroups: NavGroup[] = [
       { id: "environment", labelKey: "nav.environment", icon: Variable },
       { id: "startup", labelKey: "nav.startup", icon: Rocket },
       { id: "diagnostics", labelKey: "nav.diagnostics", icon: ClipboardList },
+      { id: "snapshots", labelKey: "nav.snapshots", icon: History },
     ],
   },
   {

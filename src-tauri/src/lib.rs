@@ -96,6 +96,12 @@ pub fn run() {
             tls::inspect_tls,
             diagnostics::build_diagnostic_report,
             diagnostics::save_text_report,
+            snapshots::take_snapshot,
+            snapshots::current_snapshot,
+            snapshots::list_snapshots,
+            snapshots::get_snapshot,
+            snapshots::rename_snapshot,
+            snapshots::delete_snapshot,
             wsl::get_wsl_status,
             wsl::wsl_terminate_distro,
             wsl::wsl_set_default_distro,
@@ -8892,6 +8898,390 @@ mod dns_cache {
     pub async fn flush_dns_cache() -> Result<(), String> {
         run_powershell("Clear-DnsClientCache", &[]).await?;
         Ok(())
+    }
+}
+
+// Saved snapshots of the network setup (adapters, routes, NRPT, proxy, hosts)
+// for "it worked yesterday": take one while things work, compare later. Each
+// section is a map of item -> field -> value so the frontend can diff any two
+// snapshots without knowing what the fields mean. Values that change on their
+// own (traffic counters, timestamps) are left out so they don't drown real
+// changes.
+mod snapshots {
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    use serde::{Deserialize, Serialize};
+
+    const SNAPSHOT_LIMIT: usize = 50;
+    const FORMAT_VERSION: u32 = 1;
+
+    type Fields = BTreeMap<String, String>;
+    type Items = BTreeMap<String, Fields>;
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct Snapshot {
+        pub version: u32,
+        pub id: String,
+        pub label: String,
+        pub taken_at: u64,
+        pub computer: String,
+        pub sections: BTreeMap<String, Items>,
+        /// Sections that couldn't be read, with the reason.
+        #[serde(default)]
+        pub errors: BTreeMap<String, String>,
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SnapshotInfo {
+        pub id: String,
+        pub label: String,
+        pub taken_at: u64,
+        pub computer: String,
+        pub item_count: usize,
+        pub error_count: usize,
+    }
+
+    impl Snapshot {
+        fn info(&self) -> SnapshotInfo {
+            SnapshotInfo {
+                id: self.id.clone(),
+                label: self.label.clone(),
+                taken_at: self.taken_at,
+                computer: self.computer.clone(),
+                item_count: self.sections.values().map(|s| s.len()).sum(),
+                error_count: self.errors.len(),
+            }
+        }
+    }
+
+    fn join(list: &[String]) -> String {
+        list.join(", ")
+    }
+
+    fn fields(pairs: &[(&str, String)]) -> Fields {
+        pairs
+            .iter()
+            .filter(|(_, v)| !v.is_empty())
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
+    }
+
+    // Two items with the same key (two routes that differ only in metric,
+    // say) must not overwrite each other.
+    fn insert_unique(items: &mut Items, key: String, value: Fields) {
+        let mut k = key.clone();
+        let mut n = 2;
+        while items.contains_key(&k) {
+            k = format!("{key} #{n}");
+            n += 1;
+        }
+        items.insert(k, value);
+    }
+
+    async fn adapters() -> Result<Items, String> {
+        let mut items = Items::new();
+        for a in super::adapters::get_network_adapters().await? {
+            let value = fields(&[
+                ("Status", a.status.clone()),
+                ("IPv4", join(&a.ipv4)),
+                ("IPv6", join(&a.ipv6)),
+                ("Gateway", join(&a.gateways)),
+                ("DNS servers", join(&a.dns_servers)),
+                ("Addressing", if a.dhcp { "DHCP".into() } else { "static".into() }),
+                ("MAC", a.mac_address.clone().unwrap_or_default()),
+                ("Link speed", a.link_speed.clone().unwrap_or_default()),
+                ("MTU", a.mtu.map(|m| m.to_string()).unwrap_or_default()),
+                ("Virtual", if a.is_virtual { "yes".into() } else { String::new() }),
+            ]);
+            insert_unique(&mut items, a.name.clone(), value);
+        }
+        Ok(items)
+    }
+
+    async fn routes() -> Result<Items, String> {
+        let mut items = Items::new();
+        for r in super::routing::get_routes().await? {
+            let key = format!("{} via {} ({})", r.destination_prefix, r.next_hop, r.interface_alias);
+            let value = fields(&[
+                ("Metric", (r.route_metric + r.interface_metric).to_string()),
+                ("Protocol", r.protocol.clone()),
+                ("Store", r.store.clone()),
+            ]);
+            insert_unique(&mut items, key, value);
+        }
+        Ok(items)
+    }
+
+    async fn nrpt() -> Result<Items, String> {
+        let mut items = Items::new();
+        for r in super::nrpt::get_nrpt_rules().await? {
+            let key = if r.namespace.is_empty() { r.name.clone() } else { join(&r.namespace) };
+            let value = fields(&[
+                ("Name servers", join(&r.name_servers)),
+                ("Comment", r.comment.clone().unwrap_or_default()),
+                ("DNSSEC", if r.dns_sec_enabled { "on".into() } else { String::new() }),
+                ("DirectAccess", if r.direct_access_enabled { "on".into() } else { String::new() }),
+                ("DirectAccess servers", join(&r.direct_access_dns_servers)),
+            ]);
+            insert_unique(&mut items, key, value);
+        }
+        Ok(items)
+    }
+
+    async fn proxy() -> Result<Items, String> {
+        let p = super::proxy::get_winhttp_proxy().await?;
+        let mut items = Items::new();
+        items.insert(
+            "WinHTTP proxy".to_string(),
+            fields(&[
+                (
+                    "Server",
+                    if p.enabled { p.proxy_server.clone().unwrap_or_default() } else { "direct access".into() },
+                ),
+                ("Bypass list", p.bypass_list.clone().unwrap_or_default()),
+            ]),
+        );
+        Ok(items)
+    }
+
+    // Keyed by host name, since "where does this name point" is the question.
+    async fn hosts() -> Result<Items, String> {
+        let mut by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for e in super::hosts::get_hosts_entries().await?.entries.into_iter().filter(|e| e.enabled) {
+            for name in e.hostnames {
+                by_name.entry(name.to_lowercase()).or_default().push(e.ip.clone());
+            }
+        }
+        Ok(by_name
+            .into_iter()
+            .map(|(name, ips)| (name, fields(&[("Address", ips.join(", "))])))
+            .collect())
+    }
+
+    pub async fn collect(label: String) -> Snapshot {
+        // Each section shells out to PowerShell, so read them at the same time.
+        use tauri::async_runtime::spawn;
+        let (a, r, n, p, h) = (spawn(adapters()), spawn(routes()), spawn(nrpt()), spawn(proxy()), spawn(hosts()));
+        let done = |res: Result<Result<Items, String>, tauri::Error>| res.map_err(|e| e.to_string()).and_then(|x| x);
+        let (a, r, n, p, h) = (done(a.await), done(r.await), done(n.await), done(p.await), done(h.await));
+        let mut sections = BTreeMap::new();
+        let mut errors = BTreeMap::new();
+        for (id, result) in [("adapters", a), ("routes", r), ("nrpt", n), ("proxy", p), ("hosts", h)] {
+            match result {
+                Ok(items) => {
+                    sections.insert(id.to_string(), items);
+                }
+                Err(err) => {
+                    errors.insert(id.to_string(), err);
+                }
+            }
+        }
+        let taken_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        Snapshot {
+            version: FORMAT_VERSION,
+            id: format!("snap-{taken_at}"),
+            label,
+            taken_at,
+            computer: std::env::var("COMPUTERNAME").unwrap_or_default(),
+            sections,
+            errors,
+        }
+    }
+
+    fn snapshots_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+        use tauri::Manager;
+        let dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|err| format!("couldn't find the app data folder: {err}"))?
+            .join("snapshots");
+        std::fs::create_dir_all(&dir).map_err(|err| format!("couldn't create the snapshots folder: {err}"))?;
+        Ok(dir)
+    }
+
+    fn valid_id(id: &str) -> bool {
+        id.strip_prefix("snap-")
+            .is_some_and(|n| !n.is_empty() && n.len() <= 20 && n.chars().all(|c| c.is_ascii_digit()))
+    }
+
+    fn clean_label(label: &str) -> Result<String, String> {
+        let label = label.trim();
+        if label.chars().count() > 80 || label.chars().any(char::is_control) {
+            return Err("The name is too long or has characters that can't be used.".to_string());
+        }
+        Ok(label.to_string())
+    }
+
+    fn read_in(dir: &std::path::Path, id: &str) -> Result<Snapshot, String> {
+        if !valid_id(id) {
+            return Err("Unknown snapshot.".to_string());
+        }
+        let text = std::fs::read_to_string(dir.join(format!("{id}.json")))
+            .map_err(|err| format!("couldn't read the snapshot: {err}"))?;
+        serde_json::from_str(&text).map_err(|err| format!("the snapshot file is damaged: {err}"))
+    }
+
+    fn list_in(dir: &std::path::Path) -> Vec<Snapshot> {
+        let mut out: Vec<Snapshot> = std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| {
+                let name = entry.file_name().to_string_lossy().to_string();
+                let id = name.strip_suffix(".json")?;
+                read_in(dir, id).ok()
+            })
+            .collect();
+        out.sort_by(|a, b| b.taken_at.cmp(&a.taken_at));
+        out
+    }
+
+    fn save_in(dir: &std::path::Path, snapshot: &Snapshot) -> Result<(), String> {
+        let json = serde_json::to_string_pretty(snapshot).map_err(|err| err.to_string())?;
+        std::fs::write(dir.join(format!("{}.json", snapshot.id)), json)
+            .map_err(|err| format!("couldn't save the snapshot: {err}"))?;
+        // Keep the newest ones only.
+        for old in list_in(dir).into_iter().skip(SNAPSHOT_LIMIT) {
+            let _ = std::fs::remove_file(dir.join(format!("{}.json", old.id)));
+        }
+        Ok(())
+    }
+
+    #[tauri::command]
+    pub async fn take_snapshot(app: tauri::AppHandle, label: String) -> Result<SnapshotInfo, String> {
+        let label = clean_label(&label)?;
+        let snapshot = collect(label).await;
+        if snapshot.sections.is_empty() {
+            let reasons: Vec<String> = snapshot.errors.values().cloned().collect();
+            return Err(format!("Nothing could be read: {}", reasons.join("; ")));
+        }
+        save_in(&snapshots_dir(&app)?, &snapshot)?;
+        Ok(snapshot.info())
+    }
+
+    /// The current state, not saved, to compare a snapshot against.
+    #[tauri::command]
+    pub async fn current_snapshot() -> Result<Snapshot, String> {
+        Ok(collect(String::new()).await)
+    }
+
+    #[tauri::command]
+    pub async fn list_snapshots(app: tauri::AppHandle) -> Result<Vec<SnapshotInfo>, String> {
+        Ok(list_in(&snapshots_dir(&app)?).iter().map(Snapshot::info).collect())
+    }
+
+    #[tauri::command]
+    pub async fn get_snapshot(app: tauri::AppHandle, id: String) -> Result<Snapshot, String> {
+        read_in(&snapshots_dir(&app)?, &id)
+    }
+
+    #[tauri::command]
+    pub async fn rename_snapshot(app: tauri::AppHandle, id: String, label: String) -> Result<(), String> {
+        let dir = snapshots_dir(&app)?;
+        let mut snapshot = read_in(&dir, &id)?;
+        snapshot.label = clean_label(&label)?;
+        save_in(&dir, &snapshot)
+    }
+
+    #[tauri::command]
+    pub async fn delete_snapshot(app: tauri::AppHandle, id: String) -> Result<(), String> {
+        if !valid_id(&id) {
+            return Err("Unknown snapshot.".to_string());
+        }
+        std::fs::remove_file(snapshots_dir(&app)?.join(format!("{id}.json")))
+            .map_err(|err| format!("couldn't delete the snapshot: {err}"))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn snap(id: u64) -> Snapshot {
+            let mut items = Items::new();
+            items.insert("Wi-Fi".into(), fields(&[("IPv4", "10.0.0.5".into()), ("Gateway", String::new())]));
+            let mut sections = BTreeMap::new();
+            sections.insert("adapters".into(), items);
+            Snapshot {
+                version: FORMAT_VERSION,
+                id: format!("snap-{id}"),
+                label: format!("snapshot {id}"),
+                taken_at: id,
+                computer: "PC".into(),
+                sections,
+                errors: BTreeMap::new(),
+            }
+        }
+
+        #[test]
+        fn empty_fields_are_left_out() {
+            let s = snap(1);
+            let wifi = &s.sections["adapters"]["Wi-Fi"];
+            assert_eq!(wifi.len(), 1);
+            assert_eq!(wifi["IPv4"], "10.0.0.5");
+        }
+
+        #[test]
+        fn duplicate_keys_are_kept_apart() {
+            let mut items = Items::new();
+            insert_unique(&mut items, "0.0.0.0/0 via 10.0.0.1 (Wi-Fi)".into(), Fields::new());
+            insert_unique(&mut items, "0.0.0.0/0 via 10.0.0.1 (Wi-Fi)".into(), Fields::new());
+            assert!(items.contains_key("0.0.0.0/0 via 10.0.0.1 (Wi-Fi) #2"));
+        }
+
+        #[test]
+        fn ids_and_labels_are_checked() {
+            assert!(valid_id("snap-1728000000000"));
+            for bad in ["snap-", "snap-12a", "../snap-1", "snap-1.json", "x-1", "snap-123456789012345678901"] {
+                assert!(!valid_id(bad), "{bad}");
+            }
+            assert!(clean_label(&"x".repeat(81)).is_err());
+            assert!(clean_label("a\nb").is_err());
+            assert_eq!(clean_label("  Before VPN  ").unwrap(), "Before VPN");
+        }
+
+        #[test]
+        fn saves_lists_newest_first_and_prunes() {
+            let dir = std::env::temp_dir().join(format!("zagzig-snap-test-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            for i in 1..=(SNAPSHOT_LIMIT as u64 + 3) {
+                save_in(&dir, &snap(i)).unwrap();
+            }
+            let list = list_in(&dir);
+            assert_eq!(list.len(), SNAPSHOT_LIMIT);
+            assert_eq!(list[0].taken_at, SNAPSHOT_LIMIT as u64 + 3);
+            assert!(read_in(&dir, "snap-1").is_err(), "the oldest were pruned");
+            assert_eq!(read_in(&dir, "snap-53").unwrap().label, "snapshot 53");
+            std::fs::write(dir.join("snap-999.json"), "not json").unwrap();
+            assert_eq!(list_in(&dir).len(), SNAPSHOT_LIMIT, "a damaged file is skipped");
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+
+        #[test]
+        #[ignore = "reads this machine's real network setup"]
+        fn real_snapshot() {
+            let s = tauri::async_runtime::block_on(collect("test".into()));
+            for (id, items) in &s.sections {
+                println!("{id}: {} items", items.len());
+            }
+            println!("errors: {:?}", s.errors);
+            assert!(s.sections.contains_key("adapters"));
+            // Nothing changed in between, so a second read must match: any
+            // difference here would show up as noise in every comparison.
+            let again = tauri::async_runtime::block_on(collect("test".into()));
+            for (id, items) in &s.sections {
+                for (key, f) in items {
+                    let other = again.sections.get(id).and_then(|i| i.get(key));
+                    assert_eq!(Some(f), other, "{id} / {key} changed between two reads");
+                }
+            }
+        }
     }
 }
 

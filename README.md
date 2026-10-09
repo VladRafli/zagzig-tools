@@ -88,6 +88,7 @@ Read a script before piping it into a shell if you prefer: [`install.sh`](./inst
 | Event Log | Recent System/Application events filtered to network & DNS problems and WSL/Hyper-V/Docker |
 | Proxy Settings | The WinHTTP proxy (`netsh winhttp`) — the machine-wide proxy Windows Update and many background services and CLI tools honor, separate from the one in Settings > Network |
 | Diagnostic Report | One Markdown report of the PC's network setup for a support ticket, with names, MACs and IPs optionally hidden |
+| Snapshots | Save the network setup (adapters, DNS, routes, NRPT, proxy, hosts) and compare it later, or with now, to see what changed |
 | Startup | See and switch off what starts at sign-in (registry Run keys and Startup folders) — the same switch Task Manager uses |
 | TLS Inspector | Connect to a host:port and show its certificate, chain, expiry and whether Windows trusts it |
 | Code Signing | Sign and verify files with Authenticode via `signtool.exe`, auto-located from the Windows SDK |
