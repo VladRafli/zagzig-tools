@@ -47,17 +47,18 @@ jobs:
           releaseName: "zagzig-tools ${{ github.ref_name }}"
           # NOTE: this is a static, per-release description — update it
           # before tagging each release (it's plain text, not generated from
-          # commits/changelog). What's below describes v0.15.0 specifically.
+          # commits/changelog). What's below describes v0.16.0 specifically.
           releaseBody: |
-            ## What's new in v0.15.0
+            ## What's new in v0.16.0
 
-            - **Command palette**: press `Ctrl+K` (or click Search in the top bar) from any page,
-              type part of a feature's name and press Enter to open it. Starred features come
-              first.
-            - **One-line installers for the terminal UI**: `install.ps1` (Windows PowerShell) and
-              `install.sh` (Linux) download the latest release, check its SHA-256 and put
-              `zagzig-tui` on your PATH. See the README for the commands.
-            - **Manual**: the PDF is regenerated to match the current built-in manual.
+            - **Snapshots** (new page under System): save the network setup (adapters, routes,
+              NRPT rules, proxy, hosts file), then compare it later, or with the current setup, to
+              see exactly what changed.
+            - **Sync to WSL** (Hosts File page): copy the active Windows hosts entries into a WSL
+              distribution's `/etc/hosts`, and optionally keep them in sync at every start.
+            - **Fixed**: a failed hosts file change could leave the real file empty. Changes are
+              now written to a temporary file, checked, then swapped in, the original is put back
+              if anything fails, empty saves are refused, and each write is logged.
 
             See the assets below to download this release.
 
